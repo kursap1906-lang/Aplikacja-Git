@@ -13,7 +13,8 @@ Statusy: `DONE`, `IN_PROGRESS`, `BLOCKED`, `TODO`. Zadania oznaczamy jako wykona
 
 - [DONE] Model Prisma dla użytkowników, bezpiecznych sesji i OAuth, kont GitHub, botów, etapów, PR, zadań, webhooków, powiadomień i audytu.
 - [DONE] Migracje PostgreSQL zwalidowane i zastosowane w lokalnej bazie z nazwanym wolumenem; potwierdzono 16 tabel.
-- [TODO] Testy integracyjne trwałości przejść stanów na PostgreSQL.
+- [TODO] Testy integracyjne trwałości przejść stanów botów na PostgreSQL.
+- [DONE] Migracje Prisma i przepływ użytkownika zweryfikowane na jednorazowym PostgreSQL bez host-portów ani trwałego wolumenu; test obejmuje rejestrację, sesję, logout/unieważnienie i ponowne logowanie.
 
 ## Faza 3 — Backend i autoryzacja
 
@@ -58,10 +59,10 @@ Statusy: `DONE`, `IN_PROGRESS`, `BLOCKED`, `TODO`. Zadania oznaczamy jako wykona
 
 ## Faza 9 — Wdrożenie VPS
 
-- [DONE] Docker/Compose z oficjalnych pakietów Ubuntu po backupie konfiguracji; PostgreSQL prywatny, osobne stacki, health checks, rotacja logów, migracje przed API, skrypty backupu i bezpiecznego test restore.
+- [DONE] Docker/Compose z oficjalnych pakietów Ubuntu po backupie konfiguracji; PostgreSQL prywatny, osobne stacki, health checks, rotacja logów, migracje przed API oraz skrypty backupu i bezpiecznego test restore.
 - [DONE] Wykonać tylko odczytowy preflight OVH: użytkownik `ubuntu`, Ubuntu 26.04, zasoby, usługi, porty i firewall.
 - [DONE] Compose i Caddy rozdzielają staging/production, izolują PostgreSQL i kierują Flutter Web/API przez wspólny HTTPS origin; obraz aplikacji zbudowany i przetestowany lokalnie bez otwierania portów.
-- [BLOCKED] Nie uruchamiać Caddy ani nie zmieniać firewalla przed potwierdzeniem domen staging/production oraz DNS.
+- [BLOCKED] Publiczny staging/HTTPS wymaga domeny staging i potwierdzonego DNS; test OAuth wymaga poświadczeń właściciela. Backup/restore staging można wykonać dopiero po uruchomieniu stacku staging. Nie uruchamiać Caddy ani nie zmieniać firewalla przed wymaganymi potwierdzeniami.
 
 ## Faza 10 — Kompilacja i wydanie
 

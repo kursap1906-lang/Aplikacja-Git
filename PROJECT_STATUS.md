@@ -29,6 +29,7 @@ Ostatnia aktualizacja: 2026-10-19
 - `npm audit --omit=dev` zgłasza zero podatności; produkcyjny obraz Docker został zbudowany z OpenSSL dla Prisma i bundla Flutter Web. Izolowany test HTTP potwierdził stronę Flutter, health liveness i 404 API; test nie opublikował portów na hoście.
 - Compose staging, production i proxy przechodzą walidację; wszystkie trzy Caddyfile są poprawne. Staging i production mają osobne sieci edge oraz sieci PostgreSQL bez publicznego portu. `Caddyfile` udostępnia tylko staging; preproduction odpowiada `503` na domenie production do czasu weryfikacji TLS; dopiero `Caddyfile.production` kieruje tam ruch.
 - Dodano jednorazowy migrator, skrypty backupu i odtworzenia na nowej, osobnej bazie staging oraz generator plików środowiskowych, który wymaga terminala, ukrywa OAuth Client ID/Secret, generuje odrębne sekrety, ustawia tryb `0600` i odmawia nadpisywania plików.
+- Dodatkowy izolowany smoke test użył tymczasowej PostgreSQL bez mapowania portów i trwałego wolumenu: migracje, gotowość API, Flutter Web/API, rejestracja, sesja, logout/unieważnienie i ponowne logowanie zakończyły się oczekiwanymi wynikami; tymczasowe zasoby testu usunięto.
 - Backup przed instalacją Dockera zachowano w `/home/ubuntu/.copilot-backups/pre-docker-20261019/`; stagingowe backup/restore nie mogły być uruchomione bez stacku i plików konfiguracyjnych.
 - Faza 1 zapisana commitem `ddbd45e`.
 - GitHub OAuth, Firebase, trwałe środowisko deweloperskie, buildy platform i wdrożenie pozostają nieukończone.

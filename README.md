@@ -54,6 +54,10 @@ E2E rejestracji zostało zweryfikowane w Chromium z lokalnym PostgreSQL:
 `201` dla utworzenia konta, `200` dla nowej sesji i widoczny dashboard.
 Testowe konto, sesje i wpisy audytu usunięto po teście.
 
+Wdrożeniowy obraz i migracje zweryfikowano również z jednorazową PostgreSQL w
+izolowanej sieci Docker, bez host-portów i trwałego wolumenu. Test nie zastępuje
+stagingu, HTTPS ani weryfikacji OAuth na prawdziwym koncie.
+
 ## GitHub Copilot coding agent
 
 GitHub udostępnia publicznie podglądowe (public preview) REST API do
