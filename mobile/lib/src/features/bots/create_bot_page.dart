@@ -154,8 +154,11 @@ class _CreateBotPageState extends ConsumerState<CreateBotPage> {
     final session = ref.watch(sessionDataProvider);
     final accounts = session.when(
       data: (data) {
-        final user = data['user'];
-        final values = user is Map ? user['githubAccounts'] : null;
+        final values =
+            data['githubAccounts'] ??
+            (data['user'] is Map
+                ? (data['user'] as Map)['githubAccounts']
+                : null);
         return values is List
             ? values
                   .whereType<Map>()
@@ -344,7 +347,14 @@ class _CreateBotPageState extends ConsumerState<CreateBotPage> {
         const SizedBox(height: 9),
         TextFormField(
           controller: _name,
+          minLines: 1,
+          maxLines: 1,
+          expands: false,
+          textAlignVertical: TextAlignVertical.center,
           decoration: const InputDecoration(
+            isDense: true,
+            constraints: BoxConstraints(minHeight: 58, maxHeight: 62),
+            contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 16),
             hintText: 'np. Agent dokumentacji',
             prefixIcon: Icon(Icons.smart_toy_outlined),
           ),

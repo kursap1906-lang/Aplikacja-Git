@@ -71,11 +71,10 @@ void main() {
           overrides: [
             sessionDataProvider.overrideWith(
               (ref) async => {
-                'user': {
-                  'githubAccounts': [
-                    {'id': 'gh-1', 'login': 'octocat', 'status': 'ACTIVE'},
-                  ],
-                },
+                'user': {'displayName': 'Tester'},
+                'githubAccounts': [
+                  {'id': 'gh-1', 'login': 'octocat', 'status': 'ACTIVE'},
+                ],
               },
             ),
             apiClientProvider.overrideWith((ref) => _FakeBotSetupApi()),
@@ -92,15 +91,20 @@ void main() {
       );
       expect(find.text('Opisz zadanie i zasady'), findsNothing);
 
-      await tester.enterText(
-        find.byType(TextFormField).first,
+      final nameField = find.byType(TextFormField).first;
+      expect(tester.getSize(nameField).height, lessThanOrEqualTo(70));
+      await tester.enterText(nameField, 'Agent dokumentacji');
+      expect(
+        tester.widget<TextFormField>(nameField).controller!.text,
         'Agent dokumentacji',
       );
+      expect(find.text('Połącz konto GitHub, aby wybrać repozytorium.'), findsNothing);
       await tester.ensureVisible(
         find.byType(DropdownButtonFormField<String>).first,
       );
       await tester.tap(find.byType(DropdownButtonFormField<String>).first);
       await tester.pumpAndSettle();
+      expect(find.text('@octocat · aktywne'), findsOneWidget);
       await tester.tap(find.text('@octocat · aktywne').last);
       await tester.pumpAndSettle();
 
