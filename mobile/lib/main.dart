@@ -90,15 +90,12 @@ class _CopilotControlCenterAppState extends ConsumerState<CopilotControlCenterAp
               title: 'Copilot Control Center',
               debugShowCheckedModeBanner: false,
               theme: AppTheme.dark,
-              locale: const Locale('pl', 'PL'),
-              supportedLocales: const [Locale('pl', 'PL')],
               routerConfig: appRouter,
             )
           : MaterialApp(
               title: 'Copilot Control Center',
               debugShowCheckedModeBanner: false,
               theme: AppTheme.dark,
-              locale: const Locale('pl', 'PL'),
               home: LoginPage(error: _signInError),
             ),
       loading: () => MaterialApp(
