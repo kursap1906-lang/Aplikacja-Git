@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 import { createApp } from './app.ts';
 import { parseConfig } from './config.ts';
 import type { PrismaClient } from './generated/prisma/client.ts';
+import { copilotCapabilities, type CopilotTaskRequest } from './github/copilot-provider.ts';
 import { hashPassword } from './security/passwords.ts';
-import { hashToken } from './security/secrets.ts';
+import { encryptSecret, hashToken } from './security/secrets.ts';
 
 function testConfig() {
   return parseConfig({
@@ -48,6 +52,41 @@ test('redirects the API root to the configured Control Center UI', async (contex
 
   assert.equal(response.statusCode, 302);
   assert.equal(response.headers.location, 'http://127.0.0.1:4173');
+});
+
+test('serves the production Flutter Web bundle and SPA routes without masking API 404s', async (context) => {
+  const webRoot = mkdtempSync(join(tmpdir(), 'ccc-web-test-'));
+  writeFileSync(join(webRoot, 'index.html'), '<!doctype html><title>Control Center UI</title>');
+  context.after(() => rmSync(webRoot, { recursive: true, force: true }));
+  const config = parseConfig({
+    NODE_ENV: 'production',
+    DATABASE_URL: 'postgresql://127.0.0.1:5432/control_center_test',
+    APP_ORIGIN: 'https://control.example.test',
+    PUBLIC_API_URL: 'https://control.example.test',
+    APP_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64url'),
+  });
+  const app = createApp({ prisma: makePrisma(), config, webRoot });
+  context.after(() => app.close());
+
+  const home = await app.inject({ method: 'GET', url: '/', headers: { host: 'control.example.test' } });
+  const deepLink = await app.inject({
+    method: 'GET',
+    url: '/bots/example-bot',
+    headers: { host: 'control.example.test' },
+  });
+  const missingApi = await app.inject({
+    method: 'GET',
+    url: '/api/does-not-exist',
+    headers: { host: 'control.example.test' },
+  });
+
+  assert.equal(home.statusCode, 200);
+  assert.match(home.headers['content-type'] ?? '', /text\/html/);
+  assert.match(home.body, /Control Center UI/);
+  assert.equal(deepLink.statusCode, 200);
+  assert.match(deepLink.body, /Control Center UI/);
+  assert.equal(missingApi.statusCode, 404);
+  assert.equal(missingApi.json().error.code, 'NOT_FOUND');
 });
 
 test('allows authenticated Flutter Web preflight headers only from the configured app origin', async (context) => {
@@ -238,7 +277,7 @@ test('uses one generic error for missing local accounts or incorrect passwords',
   });
 });
 
-test('documents unavailable Copilot coding-agent operations', async (context) => {
+test('documents supported and unsupported Copilot coding-agent operations', async (context) => {
   const app = createApp({ prisma: makePrisma(), config: testConfig() });
   context.after(() => app.close());
 
@@ -246,8 +285,8 @@ test('documents unavailable Copilot coding-agent operations', async (context) =>
 
   assert.equal(response.statusCode, 200);
   assert.deepEqual(response.json().copilotAgent, {
-    launchTasks: false,
-    readTaskStatus: false,
+    launchTasks: true,
+    readTaskStatus: true,
     readTaskLogs: false,
     resumeTasks: false,
     updateRunningTasks: false,
@@ -281,8 +320,15 @@ test('requires a valid CSRF token for authenticated stage actions', async (conte
   assert.equal(response.json().error.code, 'INVALID_CSRF_TOKEN');
 });
 
-test('returns an explicit unsupported response instead of faking a Copilot task', async (context) => {
-  const app = createApp({ prisma: makePrisma('csrf-secret'), config: testConfig() });
+test('only starts Copilot tasks for a stage owned by the authenticated user', async (context) => {
+  const app = createApp({
+    prisma: makePrisma('csrf-secret', {
+      $transaction: async (callback: (transaction: unknown) => Promise<unknown>) => callback({
+        stage: { findFirst: async () => null },
+      }),
+    }),
+    config: testConfig(),
+  });
   context.after(() => app.close());
 
   const response = await app.inject({
@@ -294,8 +340,196 @@ test('returns an explicit unsupported response instead of faking a Copilot task'
     },
   });
 
-  assert.equal(response.statusCode, 501);
-  assert.equal(response.json().error.code, 'COPILOT_TASK_EXECUTION_UNAVAILABLE');
+  assert.equal(response.statusCode, 404);
+  assert.equal(response.json().error.code, 'STAGE_NOT_FOUND');
+});
+
+test('starts an owned stage with its encrypted GitHub account and persisted task notification', async (context) => {
+  const config = testConfig();
+  let currentStatus = 'PENDING';
+  let recordedTaskId: string | undefined;
+  let recordedNotification: Record<string, unknown> | undefined;
+  let launchedRequest: Record<string, unknown> | undefined;
+  const stage = {
+    id: 'clstage00000000000000000000',
+    botId: 'clbot0000000000000000000000',
+    number: 1,
+    title: 'Update the application',
+    description: 'Implement a user-requested feature.',
+    acceptanceCriteria: ['Add tests', 'Keep secrets safe'],
+    branchName: null,
+    status: 'PENDING',
+    transitions: [],
+    bot: {
+      id: 'clbot0000000000000000000000',
+      systemPrompt: 'Work only in the selected repository.',
+      repository: 'owner/repository',
+      defaultBranch: 'main',
+      githubAccount: {
+        id: 'claccount000000000000000000',
+        status: 'ACTIVE',
+        tokenExpiresAt: null,
+        encryptedAccessToken: encryptSecret('github-user-token', config.APP_ENCRYPTION_KEY!),
+      },
+    },
+  };
+  const transaction = {
+    stage: {
+      findFirst: async () => ({ ...stage, status: currentStatus }),
+      findMany: async () => [{ number: 1, status: currentStatus }],
+      updateMany: async ({ data }: { data: { status: string } }) => {
+        currentStatus = data.status;
+        return { count: 1 };
+      },
+    },
+    backgroundJob: {
+      findFirst: async () => null,
+      create: async () => ({ id: 'cljob00000000000000000000000' }),
+      update: async ({ data }: { data: { externalTaskId?: string } }) => {
+        recordedTaskId = data.externalTaskId;
+        return { id: 'cljob00000000000000000000000' };
+      },
+    },
+    stageTransitionEvent: { create: async () => ({ id: 'event-id' }) },
+    notification: {
+      create: async ({ data }: { data: Record<string, unknown> }) => {
+        recordedNotification = data;
+        return { id: 'notification-id' };
+      },
+    },
+    auditEvent: { create: async () => ({ id: 'audit-id' }) },
+  };
+  const provider = {
+    capabilities: copilotCapabilities,
+    launchTask: async (request: CopilotTaskRequest) => {
+      launchedRequest = request;
+      return { id: 'task_123', state: 'queued' as const };
+    },
+    getTask: async () => ({ id: 'task_123', state: 'queued' as const }),
+  };
+  const app = createApp({
+    prisma: makePrisma('csrf-secret', {
+      $transaction: async (callback: (value: typeof transaction) => Promise<unknown>) => callback(transaction),
+    }),
+    config,
+    copilotProvider: provider,
+  });
+  context.after(() => app.close());
+
+  const response = await app.inject({
+    method: 'POST',
+    url: `/api/stages/${stage.id}/start`,
+    headers: {
+      authorization: 'Bearer local-test-session',
+      'x-csrf-token': 'csrf-secret',
+    },
+    payload: {},
+  });
+
+  assert.equal(response.statusCode, 202);
+  assert.deepEqual(response.json(), {
+    task: { id: 'task_123', state: 'queued', url: null },
+    stage: { id: stage.id, status: 'RUNNING' },
+  });
+  assert.equal(currentStatus, 'RUNNING');
+  assert.equal(recordedTaskId, 'task_123');
+  assert.equal(recordedNotification?.type, 'COPILOT_TASK_STARTED');
+  assert.equal(launchedRequest?.accessToken, 'github-user-token');
+  assert.equal(launchedRequest?.repository, 'owner/repository');
+  assert.equal(launchedRequest?.baseBranch, 'main');
+  assert.match(String(launchedRequest?.prompt), /Keep secrets safe/);
+});
+
+test('syncs a completed cloud-agent task through testing to approval and records one notification', async (context) => {
+  const config = testConfig();
+  const stageId = 'clstage00000000000000000000';
+  const events: Record<string, unknown>[] = [];
+  const notifications: Record<string, unknown>[] = [];
+  const transitions: Record<string, unknown>[] = [];
+  const stage = {
+    id: stageId,
+    botId: 'clbot0000000000000000000000',
+    number: 1,
+    status: 'RUNNING',
+    bot: {
+      id: 'clbot0000000000000000000000',
+      repository: 'owner/repository',
+      githubAccount: {
+        id: 'claccount000000000000000000',
+        status: 'ACTIVE',
+        tokenExpiresAt: null,
+        encryptedAccessToken: encryptSecret('github-user-token', config.APP_ENCRYPTION_KEY!),
+      },
+    },
+    jobs: [{ id: 'cljob00000000000000000000000', externalTaskId: 'task_123' }],
+  };
+  const transaction = {
+    stage: {
+      updateMany: async ({ data }: { data: { status: string } }) => {
+        transitions.push(data);
+        return { count: 1 };
+      },
+    },
+    stageTransitionEvent: {
+      create: async ({ data }: { data: Record<string, unknown> }) => {
+        events.push(data);
+        return { id: 'event-id' };
+      },
+    },
+    notification: {
+      create: async ({ data }: { data: Record<string, unknown> }) => {
+        notifications.push(data);
+        return { id: 'notification-id' };
+      },
+    },
+    auditEvent: { create: async () => ({ id: 'audit-id' }) },
+  };
+  const provider = {
+    capabilities: copilotCapabilities,
+    launchTask: async () => ({ id: 'task_123', state: 'queued' as const }),
+    getTask: async (
+      request: Pick<CopilotTaskRequest, 'accessToken' | 'repository'> & { taskId: string },
+    ) => {
+      assert.equal(request.accessToken, 'github-user-token');
+      assert.equal(request.repository, 'owner/repository');
+      assert.equal(request.taskId, 'task_123');
+      return {
+        id: 'task_123',
+        state: 'completed' as const,
+        html_url: 'https://github.com/owner/repository',
+      };
+    },
+  };
+  const app = createApp({
+    prisma: makePrisma('csrf-secret', {
+      stage: { findFirst: async () => stage },
+      $transaction: async (callback: (value: typeof transaction) => Promise<unknown>) => callback(transaction),
+    }),
+    config,
+    copilotProvider: provider,
+  });
+  context.after(() => app.close());
+
+  const response = await app.inject({
+    method: 'GET',
+    url: `/api/stages/${stageId}/task`,
+    headers: { authorization: 'Bearer local-test-session' },
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(response.json(), {
+    task: {
+      id: 'task_123',
+      state: 'completed',
+      url: 'https://github.com/owner/repository',
+      updatedAt: null,
+    },
+    stage: { id: stageId, status: 'WAITING_APPROVAL' },
+  });
+  assert.deepEqual(transitions.map((event) => event.status), ['TESTING', 'WAITING_APPROVAL']);
+  assert.equal(events.length, 2);
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0]?.type, 'COPILOT_TASK_COMPLETED');
 });
 
 test('rejects a mobile OAuth handoff with a different state', async (context) => {

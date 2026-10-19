@@ -50,7 +50,7 @@ void main() {
     expect(find.text('Połącz GitHub'), findsOneWidget);
   });
 
-  testWidgets('an unstarted stage is not presented as a running Copilot task', (tester) async {
+  testWidgets('an unstarted stage offers an explicit Copilot task action', (tester) async {
     await tester.pumpWidget(ProviderScope(
       overrides: [
         botProvider.overrideWith((ref, id) async => {
@@ -76,7 +76,8 @@ void main() {
 
     expect(find.text('Agent dokumentacji'), findsOneWidget);
     expect(find.text('Aktualizacja README'), findsOneWidget);
-    expect(find.text('Uruchamianie przez Copilot niedostępne'), findsOneWidget);
+    expect(find.text('Uruchom zadanie Copilot'), findsOneWidget);
+    expect(find.textContaining('podglądowego GitHub REST API'), findsOneWidget);
     expect(find.text('Zatwierdź etap'), findsNothing);
   });
 

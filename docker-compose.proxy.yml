@@ -1,0 +1,46 @@
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    env_file:
+      - ${PROXY_ENV_FILE:-.env.proxy}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    networks:
+      - staging_edge
+      - production_edge
+    volumes:
+      - ${CADDYFILE:-./Caddyfile}:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "caddy", "validate", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+
+volumes:
+  caddy_data:
+  caddy_config:
+
+networks:
+  staging_edge:
+    name: ccc-staging-edge
+    external: true
+  production_edge:
+    name: ccc-production-edge
+    external: true

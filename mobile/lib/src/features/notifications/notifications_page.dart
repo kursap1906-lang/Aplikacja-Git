@@ -87,16 +87,16 @@ class _NotificationRow extends ConsumerWidget {
   }
 
   static Color _color(String type) => switch (type.toUpperCase()) {
-        'ERROR' || 'TESTS_FAILED' || 'BOT_ERROR' => AppColors.coral,
-        'APPROVAL' || 'WAITING_APPROVAL' || 'PR_READY' => AppColors.amber,
-        'SUCCESS' || 'STAGE_APPROVED' || 'PROJECT_COMPLETED' => AppColors.mint,
+        'ERROR' || 'TESTS_FAILED' || 'BOT_ERROR' || 'COPILOT_TASK_FAILED' || 'COPILOT_TASK_TIMED_OUT' => AppColors.coral,
+        'APPROVAL' || 'WAITING_APPROVAL' || 'PR_READY' || 'COPILOT_TASK_WAITING_FOR_USER' => AppColors.amber,
+        'SUCCESS' || 'STAGE_APPROVED' || 'PROJECT_COMPLETED' || 'COPILOT_TASK_COMPLETED' => AppColors.mint,
         _ => AppColors.blue,
       };
 
   static IconData _icon(String type) => switch (type.toUpperCase()) {
-        'ERROR' || 'TESTS_FAILED' || 'BOT_ERROR' => Icons.error_outline_rounded,
-        'APPROVAL' || 'WAITING_APPROVAL' || 'PR_READY' => Icons.hourglass_top_rounded,
-        'SUCCESS' || 'STAGE_APPROVED' || 'PROJECT_COMPLETED' => Icons.check_circle_outline_rounded,
+        'ERROR' || 'TESTS_FAILED' || 'BOT_ERROR' || 'COPILOT_TASK_FAILED' || 'COPILOT_TASK_TIMED_OUT' => Icons.error_outline_rounded,
+        'APPROVAL' || 'WAITING_APPROVAL' || 'PR_READY' || 'COPILOT_TASK_WAITING_FOR_USER' => Icons.hourglass_top_rounded,
+        'SUCCESS' || 'STAGE_APPROVED' || 'PROJECT_COMPLETED' || 'COPILOT_TASK_COMPLETED' => Icons.check_circle_outline_rounded,
         _ => Icons.notifications_none_rounded,
       };
 }

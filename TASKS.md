@@ -7,7 +7,7 @@ Statusy: `DONE`, `IN_PROGRESS`, `BLOCKED`, `TODO`. Zadania oznaczamy jako wykona
 - [DONE] Sprawdzić strukturę, historię, stan Git i lokalnie dostępne narzędzia.
 - [DONE] Zapisać architekturę początkową oraz ujawnić niezweryfikowane założenia o Copilocie i VPS.
 - [DONE] Zbudować i przetestować reguły etapów blokujące przejścia poza wymaganymi statusami.
-- [DONE] Sprawdzić publiczną specyfikację REST GitHuba pod kątem endpointu uruchamiania coding agent; nie został znaleziony.
+- [DONE] Zweryfikować aktualną dokumentację GitHub REST Agent Tasks API, wymagane uprawnienia i ograniczenia public preview.
 
 ## Faza 2 — Architektura i baza danych
 
@@ -18,16 +18,17 @@ Statusy: `DONE`, `IN_PROGRESS`, `BLOCKED`, `TODO`. Zadania oznaczamy jako wykona
 ## Faza 3 — Backend i autoryzacja
 
 - [DONE] API Fastify z walidacją Zod, limitowaniem żądań, kontrolą uprawnień i health checks.
-- [IN_PROGRESS] OAuth z PKCE, CSRF, przechowywaniem sesji i szyfrowaniem tokenów; do rzeczywistego logowania potrzebny GitHub OAuth client.
-- [DONE] Testy API/OAuth/CSRF/Codespaces Origin, test TypeScript i testy jednostkowe: 24/24 zaliczone; `GET /` przekierowuje do UI.
+- [DONE] OAuth z PKCE, CSRF, przechowywaniem sesji i szyfrowaniem tokenów; rzeczywiste logowanie czeka na poświadczenia właściciela.
+- [DONE] Testy API/OAuth/CSRF/Codespaces Origin, TypeScript i testy jednostkowe: 32/32 zaliczone; `GET /` przekierowuje do UI.
 - [DONE] Pełne E2E rejestracji w Chromium i PostgreSQL: `201` rejestracja, `200` sesja i widoczny dashboard; konto testowe posprzątano.
 
 ## Faza 4 — Integracja GitHub i Copilot
 
-- [DONE] Zweryfikować oficjalne publiczne OpenAPI: endpointów uruchamiania/wznawiania/monitorowania zadań coding agent nie znaleziono.
-- [BLOCKED] Pozostaje potwierdzić udokumentowany oficjalny alternatywny mechanizm uruchamiania agenta; API ustawień uprawnień nie steruje zadaniami.
-- [TODO] Implementować tylko obsługiwane operacje, webhooki z weryfikacją podpisu i deduplikacją.
-- [TODO] Test integracyjny wymaga prawdziwej autoryzacji GitHub i repozytorium testowego.
+- [DONE] Zaimplementować uruchamianie zadań i pobieranie ich statusu przez GitHub Agent Tasks REST API (public preview).
+- [DONE] Wiązać uruchamianie z repozytorium i kontem GitHub wybranym dla bota, zapisywać identyfikator zadania i powiadomienia oraz chronić przed duplikowaniem po niejednoznacznym timeoutie.
+- [IN_PROGRESS] Prawdziwy test GitHub wymaga zgody OAuth, uprawnienia Agent tasks i planu Copilot Business/Enterprise.
+- [DONE] Status jest synchronizowany na żądanie. Aktualne REST API nie udostępnia endpointów wznawiania, logów, pauzowania ani anulowania zadań.
+- [TODO] Synchronizacja artefaktu PR z Agent Task do lokalnego modelu widoku PR; aktualnie aplikacja zapisuje ID i URL zadania.
 
 ## Faza 5 — System botów i etapów
 
@@ -37,37 +38,39 @@ Statusy: `DONE`, `IN_PROGRESS`, `BLOCKED`, `TODO`. Zadania oznaczamy jako wykona
 
 ## Faza 6 — Flutter UI/UX
 
-- [DONE] Flutter Web uruchomiony, dashboard z nawigacją desktop/mobile, Material 3, Riverpod i GoRouter; testy 3/3 przechodzą, analizator bez błędów.
+- [DONE] Flutter Web, dashboard z nawigacją desktop/mobile, Material 3, Riverpod i GoRouter; testy 4/4 przechodzą, analizator bez błędów, release bundle zbudowany.
 - [DONE] Usunięto biały ekran wywołany nieprawidłowym browser locale i inicjalizacją Firebase; screenshoty Chromium potwierdziły render loginu na desktopie/mobile bez błędów konsoli.
 - [DONE] Codespaces ma jeden automatyczny start przy uruchomieniu kontenera i właściwe przekierowanie root API do portu UI.
 - [DONE] Fingerprintowy start/restart zachowuje jeden proces API/gateway i wolumen PostgreSQL, nie wymaga ręcznego zabijania portów.
-- [IN_PROGRESS] Widoki kont GitHub, botów, etapów, PR, zdarzeń i ustawień są połączone z API; produkcyjne logowanie czeka na OAuth client.
+- [IN_PROGRESS] Widoki kont GitHub, botów, etapów, PR, zdarzeń i ustawień są połączone z API; prawdziwy przepływ OAuth wymaga poświadczeń i weryfikacji uprawnień.
 - [TODO] Potwierdzić eksport buildu Android/Windows; iOS wymaga macOS i podpisu Apple Developer.
 
 ## Faza 7 — Powiadomienia
 
-- [TODO] Historia zdarzeń aplikacji i rejestracja urządzeń.
-- [TODO] FCM wymaga konfiguracji projektu Firebase i platformowych poświadczeń.
+- [IN_PROGRESS] Powiadomienia aplikacyjne zapisują się przy synchronizacji statusu zadania; automatyczny polling nie jest skonfigurowany.
+- [BLOCKED] Push FCM wymaga konfiguracji projektu Firebase i platformowych poświadczeń.
 
 ## Faza 8 — Testy i bezpieczeństwo
 
-- [TODO] Testy domenowe, API, retry, webhooków i autoryzacji; przegląd bezpieczeństwa.
+- [DONE] Backend: 32/32 testy; TypeScript, Prisma schema, Flutter testy/analyze/build Web, `npm audit --omit=dev` i diff checks przechodzą.
+- [TODO] Dodatkowe testy integracyjne z prawdziwym GitHub OAuth/Agent Tasks i PostgreSQL staging.
 - [TODO] Nie deklarować testów produkcyjnych bez rzeczywistych poświadczeń i potwierdzonego środowiska.
 
 ## Faza 9 — Wdrożenie VPS
 
-- [TODO] Docker Compose, Caddy, PostgreSQL tylko w sieci prywatnej, health checks, backup i restore.
-- [BLOCKED] Przed dostępem do OVH potrzebny jest poprawny alias/hostname SSH z użytkownikiem `ubuntu` i kluczem operatora.
-- [TODO] Sprawdzić system, zasoby i istniejące usługi przed jakąkolwiek zmianą; bez destrukcyjnych działań.
+- [DONE] Docker/Compose z oficjalnych pakietów Ubuntu po backupie konfiguracji; PostgreSQL prywatny, osobne stacki, health checks, rotacja logów, migracje przed API, skrypty backupu i bezpiecznego test restore.
+- [DONE] Wykonać tylko odczytowy preflight OVH: użytkownik `ubuntu`, Ubuntu 26.04, zasoby, usługi, porty i firewall.
+- [DONE] Compose i Caddy rozdzielają staging/production, izolują PostgreSQL i kierują Flutter Web/API przez wspólny HTTPS origin; obraz aplikacji zbudowany i przetestowany lokalnie bez otwierania portów.
+- [BLOCKED] Nie uruchamiać Caddy ani nie zmieniać firewalla przed potwierdzeniem domen staging/production oraz DNS.
 
 ## Faza 10 — Kompilacja i wydanie
 
-- [TODO] GitHub Actions dla Android APK/AAB i Windows ZIP z binariami Flutter.
+- [BLOCKED] Android APK/AAB wymaga Android SDK i konfiguracji podpisu; Windows ZIP wymaga Windows runnera/MSVC.
 - [BLOCKED] iOS IPA wymaga macOS, podpisywania i konfiguracji konta Apple Developer.
 
 ## Jawne braki
 
-Nie znaleziono oficjalnego endpointu uruchamiania zadań coding agent. Brakuje OAuth client GitHub, konfiguracji Firebase, produkcyjnej trwałej bazy i artefaktów buildów Android/Windows/iOS. VPS jest celowo nietknięty, aby umożliwić ręczne przeniesienie projektu.
+Agent Tasks API jest w public preview; wymaga Copilot Business/Enterprise i tokenu użytkownika z właściwym dostępem. Wdrożenie staging/production blokują domeny/DNS, OAuth App credentials i weryfikacja uprawnień na prawdziwym koncie. Staging nie został uruchomiony, a Caddy/firewall nie zostały zmienione. Brakuje Firebase/push oraz artefaktów kompilacji Android/Windows/iOS.
 
 ## Podgląd lokalny
 

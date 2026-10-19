@@ -54,13 +54,125 @@ E2E rejestracji zostało zweryfikowane w Chromium z lokalnym PostgreSQL:
 `201` dla utworzenia konta, `200` dla nowej sesji i widoczny dashboard.
 Testowe konto, sesje i wpisy audytu usunięto po teście.
 
-## Ograniczenia
+## GitHub Copilot coding agent
 
-Sprawdzona oficjalna specyfikacja GitHub REST API nie zawiera endpointu
-uruchamiania zadań Copilot coding agent. Aplikacja nie symuluje tej funkcji;
-przedstawia ją jako niedostępną. Faktyczne logowanie wymaga skonfigurowanych
-sekretów OAuth GitHub. Powiadomienia push wymagają Firebase. iOS wymaga macOS,
+GitHub udostępnia publicznie podglądowe (public preview) REST API do
+uruchamiania i sprawdzania stanu zadań cloud agent:
+`POST /agents/repos/{owner}/{repo}/tasks` oraz
+`GET /agents/repos/{owner}/{repo}/tasks/{task_id}`. Uruchomienie wymaga planu
+Copilot Business lub Enterprise oraz tokenu użytkownika. Dokumentacja dopuszcza personal access token,
+OAuth App token i GitHub App user-to-server token; GitHub App installation
+access token nie jest obsługiwany. Dla fine-grained PAT i GitHub App user
+token wymagane jest repozytoryjne `Agent tasks: read and write` (przy samym
+odczycie stanu: `read`). OAuth App i uprawnienia konkretnego konta/repozytorium
+oraz reguły organizacji muszą być zweryfikowane na prawdziwym koncie; aplikacja
+nie udaje sukcesu przy odpowiedzi odmownej API.
+
+Źródła: [uruchamianie cloud agent przez API](https://docs.github.com/en/copilot/how-tos/use-copilot-agents/cloud-agent/use-cloud-agent-via-the-api)
+i [REST API agent tasks](https://docs.github.com/en/rest/agent-tasks/agent-tasks).
+API jest public preview i wymaga Copilot Business lub Enterprise. Pozwala
+uruchomić zadanie i odczytać jego stan/sesje, ale nie udostępnia endpointu
+wznawiania, pauzowania, anulowania ani logów wykonania. W aplikacji te funkcje
+nie są symulowane. Status odświeża się na żądanie użytkownika; powiadomienia
+aplikacyjne zapisują się przy synchronizacji, ale push wymaga Firebase.
+
+Do logowania potrzebne są poświadczenia GitHub i osobna zgoda na każdy
+podłączany account. Nie wkładaj tokenów ani sekretów do repozytorium. Jeśli
+GitHub odrzuci żądanie z powodu planu, zakresu tokenu lub reguł organizacji,
+aplikacja pokazuje błąd zamiast udawać uruchomienie.
+
+Powiadomienia push wymagają konfiguracji Firebase. iOS wymaga macOS,
 certyfikatów i konta Apple Developer.
+
+## Topologia Compose dla stagingu i produkcji
+
+Flutter Web jest kompilowany do `mobile/build/web`, a obraz API serwuje ten
+bundle razem z `/api/*` i health-checkami. Zewnętrzny, wspólny projekt Caddy
+łączy się z osobnymi sieciami brzegowymi staging i production; PostgreSQL
+pozostaje bez `ports` w prywatnej sieci danego projektu. Named volumes i nazwy
+projektów są oddzielne. Jednorazowy kontener migracyjny wdraża zatwierdzone
+migracje PostgreSQL przed uruchomieniem API.
+
+Utwórz osobną GitHub OAuth App dla każdego środowiska. Ustaw:
+
+- Production Homepage URL: `https://<PRODUCTION_DOMAIN>`
+- Production Authorization callback URL: `https://<PRODUCTION_DOMAIN>/api/auth/github/callback`
+- Staging Homepage URL: `https://<STAGING_DOMAIN>`
+- Staging Authorization callback URL: `https://<STAGING_DOMAIN>/api/auth/github/callback`
+
+Po zatwierdzeniu zmian kodu uruchom `python3 scripts/create-deployment-env.py`
+w chronionym terminalu. Skrypt pyta o domeny i ukrywa oba OAuth Client ID/Secret
+podczas wpisywania, generuje odrębne losowe hasła PostgreSQL, klucze szyfrowania
+i sekrety webhooków, a następnie tworzy trzy pliki z prawami `0600`. Obecne
+pliki nigdy nie są nadpisywane; skrypt odmawia pracy przy brudnym drzewie Git.
+Wygenerowane pliki nie są śledzone przez Git. Skrypt nie sprawdza DNS i nie
+uruchamia kontenerów. Właściciel musi potwierdzić rekordy A/AAAA obu domen
+przed uruchomieniem Caddy.
+
+W plikach staging/production zachowaj różne `APP_PROXY_ALIAS`, bazy,
+użytkowników, edge networks i losowe sekrety. `APP_IMAGE_TAG` jest ustawiany na
+commit SHA źródła. `.env.proxy` zawiera nazwy domen i ścieżkę do aktywnego
+Caddyfile. Utwórz sieci dopiero po wykonaniu backupu wymaganej konfiguracji
+serwera i sprawdzeniu, że zachowano SSH.
+
+Najpierw zbuduj Web i uruchom wyłącznie staging:
+
+```bash
+(cd mobile && flutter build web --release)
+sudo docker network create ccc-staging-edge
+sudo docker network create ccc-production-edge
+sudo env APP_ENV_FILE=.env.staging docker compose -p ccc-staging --env-file .env.staging up -d --build
+```
+
+Po potwierdzeniu rekordów DNS obu domen uruchom Caddy z domyślnym `Caddyfile`, który
+kieruje wyłącznie staging. Sprawdź HTTPS, API, UI, rejestrację/logowanie oraz
+backup i restore na osobnej bazie staging:
+
+```bash
+sudo env PROXY_ENV_FILE=.env.proxy docker compose -f docker-compose.proxy.yml -p ccc-proxy --env-file .env.proxy up -d
+bash scripts/backup-postgres.sh staging
+bash scripts/restore-staging-backup-test.sh backups/staging/<backup>.dump
+```
+
+Po akceptacji raportu stagingu, backupu i rollbacku uruchom prywatny produkcyjny
+stack API:
+
+```bash
+sudo env APP_ENV_FILE=.env.production docker compose -p ccc-production --env-file .env.production up -d --build
+```
+
+Zmień `CADDYFILE` w `.env.proxy` na `./Caddyfile.preproduction` i odtwórz tylko
+kontener proxy; konfiguracja ta obsługuje staging, ale zwraca `503` dla
+production podczas uzyskiwania i weryfikacji certyfikatu:
+
+```bash
+sudo env PROXY_ENV_FILE=.env.proxy docker compose -f docker-compose.proxy.yml -p ccc-proxy --env-file .env.proxy up -d --force-recreate caddy
+```
+
+Dopiero po sprawdzeniu certyfikatu przełącz `CADDYFILE` na
+`./Caddyfile.production` i ponownie odtwórz Caddy. Tylko końcowy plik routuje
+ruch production do API. Nie zmieniaj firewalla bez backupowania konfiguracji
+i zachowania dostępu SSH.
+
+Po utworzeniu aplikacyjnego stacku twórz i sprawdzaj backup PostgreSQL na stagingu
+poleceniami `bash scripts/backup-postgres.sh staging` i
+`bash scripts/restore-staging-backup-test.sh backups/staging/<backup>.dump`.
+Restore tworzy osobną bazę testową i nigdy nie nadpisuje ani nie usuwa
+istniejącej bazy. Lokalne backupy trzeba skopiować do zatwierdzonego przez
+właściciela, szyfrowanego storage poza VPS przed produkcją.
+
+W każdym wdrożeniu ustaw `APP_IMAGE_TAG` na niezmienny identyfikator commita
+i zachowaj poprzednie obrazy pod ich tagami. Rollback wymaga przywrócenia
+poprzedniego `APP_IMAGE_TAG` w `.env.production`, a następnie:
+
+```bash
+sudo env APP_ENV_FILE=.env.production docker compose -p ccc-production --env-file .env.production up -d --no-build
+```
+
+Wolumen bazy nie jest usuwany. Rollback jest bezpieczny tylko wtedy, gdy
+poprzedni kod jest zgodny z już wdrożonymi migracjami. Nie cofaj migracji przez
+kasowanie lub nadpisywanie bazy. Przed każdą zmianą produkcyjną wymagane są
+zweryfikowany backup i sprawdzona procedura odtworzenia.
 
 ## Architektura i stan
 

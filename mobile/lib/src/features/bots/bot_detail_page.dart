@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/api.dart';
 import '../../core/providers.dart';
@@ -30,14 +31,6 @@ class BotDetailPage extends ConsumerWidget {
                 Text('${bot['repository']} · ${bot['githubAccount'] is Map ? (bot['githubAccount'] as Map)['login'] : ''}',
                     style: const TextStyle(color: AppColors.muted)),
               ])),
-              Tooltip(
-                message: 'Publiczne GitHub REST API nie udostępnia uruchamiania coding agenta.',
-                child: FilledButton.icon(
-                  onPressed: null,
-                  icon: Icon(Icons.info_outline_rounded),
-                  label: Text('Agent niedostępny'),
-                ),
-              ),
             ])),
           ),
           SliverPadding(
@@ -50,7 +43,7 @@ class BotDetailPage extends ConsumerWidget {
                   const SizedBox(height: 8),
                   SelectableText(bot['systemPrompt']?.toString() ?? '', style: const TextStyle(color: AppColors.muted, height: 1.5)),
                   const SizedBox(height: 8),
-                  const Text('GitHub coding agent nie ma publicznego endpointu uruchamiania zadań w dostępnej specyfikacji REST.',
+                  const Text('Zadania korzystają z podglądowego GitHub REST API i wymagają odpowiedniego planu Copilot oraz uprawnień repozytorium.',
                       style: TextStyle(color: AppColors.amber, fontSize: 12)),
                 ]),
               ),
@@ -94,6 +87,7 @@ class _StageCard extends ConsumerStatefulWidget {
 class _StageCardState extends ConsumerState<_StageCard> {
   bool _busy = false;
   String? _error;
+  String? _taskUrl;
 
   Future<void> _perform(String action, {String? reason}) async {
     setState(() {
@@ -101,19 +95,69 @@ class _StageCardState extends ConsumerState<_StageCard> {
       _error = null;
     });
     try {
-      await ref.read(apiClientProvider).request(
+      final result = await ref.read(apiClientProvider).request(
         '/stages/${widget.stage['id']}/$action',
         method: 'POST',
         data: {'reason': ?reason},
       );
       if (mounted) {
+        if (action == 'start') {
+          final task = result['task'];
+          final url = task is Map ? task['url'] : null;
+          if (url is String) _taskUrl = url;
+        }
         widget.onRefresh();
         ref.invalidate(botsProvider);
+        ref.invalidate(notificationsProvider);
       }
     } on Object catch (error) {
       if (mounted) setState(() => _error = error.toString());
     } finally {
       if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _refreshCopilotTask() async {
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final result = await ref.read(apiClientProvider).request(
+        '/stages/${widget.stage['id']}/task',
+      );
+      if (mounted) {
+        final task = result['task'];
+        setState(() {
+          _error = 'Status Copilota: ${task is Map ? task['state'] ?? 'nieznany' : 'nieznany'}';
+          final url = task is Map ? task['url'] : null;
+          if (url is String) _taskUrl = url;
+        });
+        widget.onRefresh();
+        ref.invalidate(botsProvider);
+        ref.invalidate(notificationsProvider);
+      }
+    } on Object catch (error) {
+      if (mounted) setState(() => _error = error.toString());
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _openCopilotTask() async {
+    final url = _taskUrl;
+    if (url == null) return;
+
+    final uri = Uri.tryParse(url);
+    if (uri == null
+        || uri.scheme != 'https'
+        || !{'github.com', 'api.github.com'}.contains(uri.host)) {
+      setState(() => _error = 'GitHub zwrócił nieprawidłowy adres zadania.');
+      return;
+    }
+
+    if (!await launchUrl(uri, mode: LaunchMode.externalApplication) && mounted) {
+      setState(() => _error = 'Nie udało się otworzyć zadania GitHub.');
     }
   }
 
@@ -220,30 +264,54 @@ class _StageCardState extends ConsumerState<_StageCard> {
             const Text('Akceptacja etapu nie scala pull requesta i nie uruchamia agenta.',
                 style: TextStyle(color: AppColors.muted, fontSize: 11)),
           ],
-          if (status == 'RUNNING' || status == 'TESTING') ...[
+          if (status == 'RUNNING') ...[
             const SizedBox(height: 12),
             Wrap(spacing: 8, children: [
+              if (_taskUrl != null)
+                OutlinedButton.icon(
+                  onPressed: _busy ? null : _openCopilotTask,
+                  icon: const Icon(Icons.open_in_new_rounded),
+                  label: const Text('Otwórz zadanie GitHub'),
+                ),
               OutlinedButton.icon(
-                onPressed: _busy ? null : () => _perform('pause'),
-                icon: const Icon(Icons.pause_rounded),
-                label: const Text('Wstrzymaj'),
-              ),
-              OutlinedButton.icon(
-                onPressed: _busy ? null : () => _perform('cancel', reason: 'Anulowano przez użytkownika.'),
-                icon: const Icon(Icons.cancel_outlined),
-                label: const Text('Anuluj etap'),
+                onPressed: _busy ? null : _refreshCopilotTask,
+                icon: const Icon(Icons.sync_rounded),
+                label: const Text('Sprawdź status Copilota'),
               ),
             ]),
+            const Padding(
+              padding: EdgeInsets.only(top: 8),
+              child: Text('Wznowienie, wstrzymanie i anulowanie zadania nie są obsługiwane przez GitHub Agent Tasks API.',
+                  style: TextStyle(color: AppColors.muted, fontSize: 11)),
+            ),
           ],
-          if (status == 'PENDING' || status == 'CHANGES_REQUESTED' || status == 'PAUSED' || status == 'FAILED')
+          if (status == 'PAUSED') ...[
+            const Padding(
+              padding: EdgeInsets.only(top: 12),
+              child: Text('Zadanie GitHub może nadal działać; synchronizuj jego stan poniżej. API nie udostępnia wznawiania.',
+                  style: TextStyle(color: AppColors.muted, fontSize: 12)),
+            ),
+            OutlinedButton.icon(
+              onPressed: _busy ? null : _refreshCopilotTask,
+              icon: const Icon(Icons.sync_rounded),
+              label: const Text('Sprawdź status Copilota'),
+            ),
+            if (_taskUrl != null)
+              TextButton.icon(
+                onPressed: _busy ? null : _openCopilotTask,
+                icon: const Icon(Icons.open_in_new_rounded),
+                label: const Text('Otwórz zadanie GitHub'),
+              ),
+          ],
+          if (status == 'PENDING' || status == 'CHANGES_REQUESTED' || status == 'FAILED')
             Padding(
               padding: const EdgeInsets.only(top: 12),
               child: Tooltip(
-                message: 'GitHub REST API nie dokumentuje publicznego uruchamiania coding agenta. Etap pozostaje zapisany i nie zostanie oznaczony jako rozpoczęty.',
+                message: 'Uruchamia zadanie GitHub Copilot cloud agent dla repozytorium i gałęzi przypisanych do tego bota.',
                 child: OutlinedButton.icon(
-                  onPressed: null,
-                  icon: Icon(Icons.block_rounded),
-                  label: Text('Uruchamianie przez Copilot niedostępne'),
+                  onPressed: _busy ? null : () => _perform('start'),
+                  icon: const Icon(Icons.play_arrow_rounded),
+                  label: const Text('Uruchom zadanie Copilot'),
                 ),
               ),
             ),

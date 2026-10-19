@@ -1,4 +1,4 @@
-{$APP_DOMAIN} {
+{$STAGING_DOMAIN} {
 	encode zstd gzip
 	header {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
@@ -6,5 +6,5 @@
 		Referrer-Policy "strict-origin-when-cross-origin"
 		-Server
 	}
-	reverse_proxy api:3000
+	reverse_proxy control-center-staging-api:3000
 }

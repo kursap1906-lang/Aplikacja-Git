@@ -9,7 +9,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
-      - data
+      data: {}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
       interval: 10s
@@ -18,14 +18,20 @@ services:
       start_period: 15s
     security_opt:
       - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
 
   api:
+    image: copilot-control-center:${APP_IMAGE_TAG:-local}
     build:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
     env_file:
-      - .env
+      - ${APP_ENV_FILE:-.env}
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@database:5432/${POSTGRES_DB}?schema=public
       HOST: 0.0.0.0
@@ -33,9 +39,13 @@ services:
     depends_on:
       database:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     networks:
-      - data
-      - edge
+      data: {}
+      edge:
+        aliases:
+          - ${APP_PROXY_ALIAS:?Set APP_PROXY_ALIAS for this deployment}
     expose:
       - "3000"
     read_only: true
@@ -51,39 +61,50 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
 
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
+  migrate:
+    image: copilot-control-center-migrate:${APP_IMAGE_TAG:-local}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: build
+    restart: "no"
+    user: node
     env_file:
-      - .env
+      - ${APP_ENV_FILE:-.env}
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@database:5432/${POSTGRES_DB}?schema=public
+      HOME: /tmp
     depends_on:
-      api:
+      database:
         condition: service_healthy
-    ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
+    command: ["npm", "run", "db:migrate"]
     networks:
-      - edge
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
+      - data
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid
     cap_drop:
       - ALL
-    cap_add:
-      - NET_BIND_SERVICE
     security_opt:
       - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
 
 volumes:
   postgres_data:
-  caddy_data:
-  caddy_config:
 
 networks:
   data:
     internal: true
   edge:
-    driver: bridge
+    name: ${APP_EDGE_NETWORK:-ccc-staging-edge}
+    external: true

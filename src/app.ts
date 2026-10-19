@@ -1,13 +1,22 @@
+import fastifyStatic from '@fastify/static';
 import cookie from '@fastify/cookie';
 import cors from '@fastify/cors';
 import type { FastifyCorsOptions } from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { z } from 'zod';
 import type { Prisma, PrismaClient } from './generated/prisma/client.ts';
 import type { AppConfig } from './config.ts';
-import { copilotCapabilities, GitHubCopilotProvider } from './github/copilot-provider.ts';
+import {
+  copilotCapabilities,
+  GitHubCopilotApiError,
+  GitHubCopilotProvider,
+  type CopilotProvider,
+  type CopilotTaskState,
+} from './github/copilot-provider.ts';
 import { createRandomToken, decryptSecret, encryptSecret, hashToken } from './security/secrets.ts';
 import { dummyPasswordHash, hashPassword, verifyPassword } from './security/passwords.ts';
 import { StageTransitionError, transitionStage, type StageSnapshot } from './stages/stage-machine.ts';
@@ -195,10 +204,15 @@ export function createApp(options: {
   prisma: PrismaClient;
   config: AppConfig;
   fetcher?: typeof fetch;
+  copilotProvider?: CopilotProvider;
+  webRoot?: string;
 }): FastifyInstance {
   const { prisma, config } = options;
   const fetcher = options.fetcher ?? fetch;
+  const copilotProvider = options.copilotProvider ?? new GitHubCopilotProvider(fetcher);
   const encryptionKey = () => optionalEncryptionKey(config);
+  const webRoot = options.webRoot ?? resolve(process.cwd(), 'web');
+  const servesFlutterWeb = config.NODE_ENV === 'production' && existsSync(resolve(webRoot, 'index.html'));
   const app = Fastify({
     logger: {
       redact: ['req.headers.authorization', 'req.headers.cookie', 'res.headers.set-cookie'],
@@ -223,6 +237,9 @@ export function createApp(options: {
   app.decorateRequest('authenticatedSession', null);
   app.register(helmet, { contentSecurityPolicy: false });
   app.register(cookie);
+  if (servesFlutterWeb) {
+    app.register(fastifyStatic, { root: webRoot });
+  }
   app.register(cors, () => (request: FastifyRequest, callback: (error: Error | null, options?: FastifyCorsOptions) => void) => {
     const requestOrigin = request.headers.origin;
     callback(null, {
@@ -263,9 +280,24 @@ export function createApp(options: {
     });
   });
 
+  app.setNotFoundHandler((request, reply) => {
+    const pathname = new URL(request.url, 'http://localhost').pathname;
+    if (servesFlutterWeb && !pathname.startsWith('/api') && !pathname.startsWith('/health')) {
+      return reply.sendFile('index.html');
+    }
+
+    return reply.status(404).send({
+      error: { code: 'NOT_FOUND', message: 'Route not found.' },
+    });
+  });
+
   app.get('/', async (request, reply) => {
     if (request.headers.host !== new URL(origin).host) {
       return reply.redirect(origin, 302);
+    }
+
+    if (servesFlutterWeb) {
+      return reply.sendFile('index.html');
     }
 
     return { service: 'copilot-control-center-api', app: origin };
@@ -1283,17 +1315,344 @@ export function createApp(options: {
       const session = requireSession(request);
       requireCsrf(request, session);
     },
-  }, async (_request, reply) => {
-    const provider = new GitHubCopilotProvider();
-    await provider.launchTask({ repository: '', prompt: '', baseBranch: '' }).catch((error: unknown) => {
-      if (error instanceof Error && error.name === 'UnsupportedCopilotCapabilityError') {
-        throw new ApiError(501, 'COPILOT_TASK_EXECUTION_UNAVAILABLE', error.message);
+  }, async (request, reply) => {
+    const session = requireSession(request);
+    const { stageId } = parseRequest(z.object({ stageId: z.string().cuid() }), request.params);
+    const claim = await prisma.$transaction(async (transaction) => {
+      const stage = await transaction.stage.findFirst({
+        where: { id: stageId, bot: { userId: session.userId } },
+        include: {
+          bot: { include: { githubAccount: true } },
+          transitions: {
+            where: { toStatus: 'CHANGES_REQUESTED' },
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+          },
+        },
+      });
+
+      if (!stage) {
+        throw new ApiError(404, 'STAGE_NOT_FOUND', 'Stage was not found.');
       }
 
-      throw error;
+      const stages: StageSnapshot[] = await transaction.stage.findMany({
+        where: { botId: stage.botId },
+        select: { number: true, status: true },
+      });
+      const transition = transitionStage(stage, 'RUNNING', stages);
+      const unconfirmedJob = await transaction.backgroundJob.findFirst({
+        where: {
+          stageId: stage.id,
+          status: 'FAILED',
+          externalTaskId: null,
+          lastError: 'SUBMISSION_RESULT_UNCONFIRMED',
+        },
+        select: { id: true },
+      });
+
+      if (unconfirmedJob) {
+        throw new ApiError(
+          409,
+          'COPILOT_TASK_SUBMISSION_UNCONFIRMED',
+          'The previous request may have reached GitHub. Check GitHub Agent Tasks before attempting another run.',
+        );
+      }
+
+      const updated = await transaction.stage.updateMany({
+        where: { id: stage.id, status: stage.status },
+        data: { status: 'RUNNING', approvedAt: null },
+      });
+
+      if (updated.count !== 1) {
+        throw new ApiError(409, 'STAGE_CHANGED_CONCURRENTLY', 'This stage has changed. Refresh and try again.');
+      }
+
+      await transaction.stageTransitionEvent.create({
+        data: {
+          stageId: stage.id,
+          fromStatus: transition.previousStatus,
+          toStatus: transition.status,
+          details: { actor: 'copilot_agent', occurredAt: transition.occurredAt },
+        },
+      });
+      const job = await transaction.backgroundJob.create({
+        data: {
+          stageId: stage.id,
+          idempotencyKey: createRandomToken(),
+          status: 'RUNNING',
+          attempts: 1,
+          lockedAt: new Date(),
+        },
+        select: { id: true },
+      });
+
+      return { stage, previousStatus: transition.previousStatus, jobId: job.id };
+    }, { isolationLevel: 'Serializable' });
+
+    const account = claim.stage.bot.githubAccount;
+    if (account.status !== 'ACTIVE') {
+      await prisma.backgroundJob.update({
+        where: { id: claim.jobId },
+        data: { status: 'FAILED', lastError: 'GITHUB_REAUTH_REQUIRED', lockedAt: null },
+      });
+      await prisma.stage.updateMany({
+        where: { id: claim.stage.id, status: 'RUNNING' },
+        data: { status: claim.previousStatus },
+      });
+      throw new ApiError(401, 'GITHUB_REAUTH_REQUIRED', 'Reconnect the associated GitHub account to start this task.');
+    }
+
+    if (account.tokenExpiresAt && account.tokenExpiresAt <= new Date()) {
+      await prisma.gitHubAccount.update({ where: { id: account.id }, data: { status: 'REAUTH_REQUIRED' } });
+      await prisma.backgroundJob.update({
+        where: { id: claim.jobId },
+        data: { status: 'FAILED', lastError: 'GITHUB_REAUTH_REQUIRED', lockedAt: null },
+      });
+      await prisma.stage.updateMany({
+        where: { id: claim.stage.id, status: 'RUNNING' },
+        data: { status: claim.previousStatus },
+      });
+      throw new ApiError(401, 'GITHUB_REAUTH_REQUIRED', 'Reconnect the associated GitHub account to start this task.');
+    }
+
+    const bot = claim.stage.bot;
+    const changeRequest = claim.stage.transitions[0]?.details;
+    const changeRequestReason = changeRequest
+      && typeof changeRequest === 'object'
+      && 'reason' in changeRequest
+      && typeof changeRequest.reason === 'string'
+      ? changeRequest.reason
+      : null;
+    const prompt = [
+      bot.systemPrompt,
+      `Task: ${claim.stage.title}`,
+      claim.stage.description,
+      ...(claim.previousStatus === 'CHANGES_REQUESTED' && changeRequestReason
+        ? [`Address this user-requested revision: ${changeRequestReason}`]
+        : []),
+      'Acceptance criteria:',
+      ...claim.stage.acceptanceCriteria.map((criterion) => `- ${criterion}`),
+    ].join('\n\n');
+
+    let task;
+    try {
+      task = await copilotProvider.launchTask({
+        accessToken: decryptSecret(account.encryptedAccessToken, encryptionKey()),
+        repository: bot.repository,
+        prompt,
+        baseBranch: claim.stage.branchName ?? bot.defaultBranch,
+      });
+    } catch (error) {
+      const definiteRejection = error instanceof GitHubCopilotApiError
+        && [400, 401, 403, 404, 422, 429].includes(error.statusCode);
+
+      if (error instanceof GitHubCopilotApiError && error.statusCode === 401) {
+        await prisma.gitHubAccount.update({ where: { id: account.id }, data: { status: 'REAUTH_REQUIRED' } });
+      }
+
+      await prisma.backgroundJob.update({
+        where: { id: claim.jobId },
+        data: {
+          status: 'FAILED',
+          lastError: definiteRejection ? (error instanceof GitHubCopilotApiError ? error.code : 'GITHUB_TASK_REJECTED')
+            : 'SUBMISSION_RESULT_UNCONFIRMED',
+          lockedAt: null,
+        },
+      });
+
+      if (definiteRejection) {
+        await prisma.stage.updateMany({
+          where: { id: claim.stage.id, status: 'RUNNING' },
+          data: { status: claim.previousStatus },
+        });
+
+        const rejectedStatus = error instanceof GitHubCopilotApiError ? error.statusCode : 502;
+        if (rejectedStatus === 401) {
+          throw new ApiError(401, 'GITHUB_REAUTH_REQUIRED', 'Reconnect the associated GitHub account to start this task.');
+        }
+        if (rejectedStatus === 403) {
+          throw new ApiError(
+            403,
+            'GITHUB_AGENT_TASK_FORBIDDEN',
+            'GitHub denied this task. Verify the Copilot plan and Agent tasks repository permissions.',
+          );
+        }
+        if (rejectedStatus === 429) {
+          throw new ApiError(503, 'GITHUB_AGENT_TASK_RATE_LIMITED', 'GitHub temporarily rate-limited task creation.');
+        }
+        throw new ApiError(502, 'GITHUB_AGENT_TASK_REJECTED', 'GitHub rejected the coding-agent task request.');
+      }
+
+      throw new ApiError(
+        502,
+        'COPILOT_TASK_SUBMISSION_UNCONFIRMED',
+        'The request may have reached GitHub. Check GitHub Agent Tasks before attempting another run.',
+      );
+    }
+
+    await prisma.$transaction(async (transaction) => {
+      await transaction.backgroundJob.update({
+        where: { id: claim.jobId },
+        data: { externalTaskId: task.id, lockedAt: null },
+      });
+      await transaction.notification.create({
+        data: {
+          userId: session.userId,
+          botId: bot.id,
+          stageId: claim.stage.id,
+          type: 'COPILOT_TASK_STARTED',
+          title: 'Copilot started a task',
+          body: `GitHub accepted the task for ${bot.repository}.`,
+        },
+      });
+      await transaction.auditEvent.create({
+        data: {
+          userId: session.userId,
+          botId: bot.id,
+          stageId: claim.stage.id,
+          action: 'COPILOT_TASK_STARTED',
+          targetType: 'BackgroundJob',
+          targetId: claim.jobId,
+          details: { externalTaskId: task.id },
+        },
+      });
     });
 
-    return reply.send({ error: 'No task was started.' });
+    return reply.status(202).send({
+      task: { id: task.id, state: task.state, url: task.html_url ?? task.url ?? null },
+      stage: { id: claim.stage.id, status: 'RUNNING' },
+    });
+  });
+
+  app.get('/api/stages/:stageId/task', {
+    preHandler: async (request) => loadOptionalSession(request, prisma),
+  }, async (request) => {
+    const session = requireSession(request);
+    const { stageId } = parseRequest(z.object({ stageId: z.string().cuid() }), request.params);
+    const stage = await prisma.stage.findFirst({
+      where: { id: stageId, bot: { userId: session.userId } },
+      include: {
+        bot: { include: { githubAccount: true } },
+        jobs: {
+          where: { externalTaskId: { not: null } },
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+        },
+      },
+    });
+
+    if (!stage) {
+      throw new ApiError(404, 'STAGE_NOT_FOUND', 'Stage was not found.');
+    }
+    const job = stage.jobs[0];
+    if (!job?.externalTaskId) {
+      throw new ApiError(404, 'COPILOT_TASK_NOT_FOUND', 'No confirmed Copilot task is recorded for this stage.');
+    }
+
+    const account = stage.bot.githubAccount;
+    if (account.status !== 'ACTIVE') {
+      throw new ApiError(401, 'GITHUB_REAUTH_REQUIRED', 'Reconnect the associated GitHub account to read this task.');
+    }
+    if (account.tokenExpiresAt && account.tokenExpiresAt <= new Date()) {
+      await prisma.gitHubAccount.update({ where: { id: account.id }, data: { status: 'REAUTH_REQUIRED' } });
+      throw new ApiError(401, 'GITHUB_REAUTH_REQUIRED', 'Reconnect the associated GitHub account to read this task.');
+    }
+
+    let task;
+    try {
+      task = await copilotProvider.getTask({
+        accessToken: decryptSecret(account.encryptedAccessToken, encryptionKey()),
+        repository: stage.bot.repository,
+        taskId: job.externalTaskId,
+      });
+    } catch (error) {
+      if (error instanceof GitHubCopilotApiError && error.statusCode === 401) {
+        await prisma.gitHubAccount.update({ where: { id: account.id }, data: { status: 'REAUTH_REQUIRED' } });
+        throw new ApiError(401, 'GITHUB_REAUTH_REQUIRED', 'Reconnect the associated GitHub account to read this task.');
+      }
+      if (error instanceof GitHubCopilotApiError && error.statusCode === 403) {
+        throw new ApiError(403, 'GITHUB_AGENT_TASK_FORBIDDEN', 'GitHub denied access to this task.');
+      }
+      if (error instanceof GitHubCopilotApiError && error.statusCode === 404) {
+        throw new ApiError(404, 'COPILOT_TASK_NOT_FOUND', 'GitHub could not find this task for the selected repository.');
+      }
+      throw error;
+    }
+
+    const terminalStatuses: Partial<Record<CopilotTaskState, StageSnapshot['status']>> = {
+      completed: 'WAITING_APPROVAL',
+      failed: 'FAILED',
+      timed_out: 'FAILED',
+      cancelled: 'CANCELLED',
+      idle: 'PAUSED',
+      waiting_for_user: 'PAUSED',
+    };
+    const terminalStatus = terminalStatuses[task.state];
+
+    let currentStageStatus = stage.status;
+    if (terminalStatus && stage.status === 'RUNNING') {
+      const nextStatuses = terminalStatus === 'WAITING_APPROVAL'
+        ? ['TESTING', 'WAITING_APPROVAL'] as const
+        : [terminalStatus] as const;
+      await prisma.$transaction(async (transaction) => {
+        let current = stage.status;
+        for (const nextStatus of nextStatuses) {
+          const updated = await transaction.stage.updateMany({
+            where: { id: stage.id, status: current },
+            data: {
+              status: nextStatus,
+              ...(nextStatus === 'WAITING_APPROVAL' ? { approvedAt: null } : {}),
+            },
+          });
+          if (updated.count !== 1) {
+            break;
+          }
+          await transaction.stageTransitionEvent.create({
+            data: {
+              stageId: stage.id,
+              fromStatus: current,
+              toStatus: nextStatus,
+              details: { actor: 'copilot_agent', externalTaskId: task.id },
+            },
+          });
+          current = nextStatus;
+        }
+
+        if (current !== stage.status) {
+          await transaction.notification.create({
+            data: {
+              userId: session.userId,
+              botId: stage.botId,
+              stageId: stage.id,
+              type: `COPILOT_TASK_${task.state.toUpperCase()}`,
+              title: task.state === 'completed'
+                ? 'Copilot completed the task'
+                : `Copilot task ${task.state.replaceAll('_', ' ')}`,
+              body: task.state === 'completed'
+                ? 'Review the result and pull request before approving the stage.'
+                : `GitHub reports the task state as ${task.state.replaceAll('_', ' ')}.`,
+            },
+          });
+          await transaction.auditEvent.create({
+            data: {
+              userId: session.userId,
+              botId: stage.botId,
+              stageId: stage.id,
+              action: `COPILOT_TASK_${task.state.toUpperCase()}`,
+              targetType: 'BackgroundJob',
+              targetId: job.id,
+              details: { externalTaskId: task.id, stageStatus: current },
+            },
+          });
+        }
+        currentStageStatus = current;
+      });
+    }
+
+    return {
+      task: { id: task.id, state: task.state, url: task.html_url ?? task.url ?? null, updatedAt: task.updated_at ?? null },
+      stage: { id: stage.id, status: currentStageStatus },
+    };
   });
 
   app.get('/api/notifications', {

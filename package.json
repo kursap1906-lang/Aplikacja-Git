@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "node --experimental-strip-types --watch src/server.ts",
     "start": "node --experimental-strip-types src/server.ts",
-    "test": "node --experimental-strip-types --test src/app.test.ts src/security/passwords.test.ts src/security/secrets.test.ts src/stages/stage-machine.test.ts",
+    "test": "node --experimental-strip-types --test src/app.test.ts src/github/copilot-provider.test.ts src/security/passwords.test.ts src/security/secrets.test.ts src/stages/stage-machine.test.ts",
     "db:generate": "prisma generate",
     "db:validate": "prisma validate",
     "db:migrate": "prisma migrate deploy"
@@ -24,6 +24,7 @@
     "@fastify/cors": "^11.1.0",
     "@fastify/helmet": "^13.0.2",
     "@fastify/rate-limit": "^10.3.0",
+    "@fastify/static": "^10.1.6",
     "@prisma/adapter-pg": "^7.10.1",
     "@prisma/client": "^7.10.1",
     "dotenv": "^16.6.1",
