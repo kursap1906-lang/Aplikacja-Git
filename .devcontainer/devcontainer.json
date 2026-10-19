@@ -1,0 +1,13 @@
+{
+  "name": "copilot-control-center",
+  "image": "mcr.microsoft.com/devcontainers/typescript-node:1-22-bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {}
+  },
+  "postStartCommand": "bash scripts/dev-up.sh >> .run-start.log 2>&1",
+  "forwardPorts": [4173, 3000],
+  "portsAttributes": {
+    "4173": { "label": "Control Center (UI + API)", "onAutoForward": "openBrowser" },
+    "3000": { "label": "Backend API (UI on port 4173)", "onAutoForward": "notify" }
+  }
+}

@@ -1,0 +1,317 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum GitHubAccountStatus {
+  ACTIVE
+  REAUTH_REQUIRED
+  REVOKED
+}
+
+enum BotStatus {
+  IDLE
+  RUNNING
+  PAUSED
+  ERROR
+}
+
+enum StageStatus {
+  PENDING
+  RUNNING
+  TESTING
+  WAITING_APPROVAL
+  APPROVED
+  CHANGES_REQUESTED
+  FAILED
+  PAUSED
+  CANCELLED
+}
+
+enum PullRequestStatus {
+  OPEN
+  CLOSED
+  MERGED
+}
+
+enum JobStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum DevicePlatform {
+  ANDROID
+  IOS
+  WEB
+}
+
+enum OAuthClientType {
+  BROWSER
+  NATIVE
+}
+
+
+model User {
+  id                    String           @id @default(cuid())
+  email                 String?          @unique
+  passwordHash          String?          @db.Text
+  identityGitHubUserId  String?          @unique
+  identityLogin         String?
+  displayName           String?
+  createdAt             DateTime         @default(now()) @db.Timestamptz(6)
+  updatedAt             DateTime         @updatedAt @db.Timestamptz(6)
+  githubAccounts        GitHubAccount[]
+  sessions              AuthSession[]
+  oauthFlows             OAuthFlow[]
+  oauthHandoffs           OAuthHandoff[]
+  bots                   Bot[]
+  notifications          Notification[]
+  auditEvents            AuditEvent[]
+  devices                PushDevice[]
+}
+
+model AuthSession {
+  id            String   @id @default(cuid())
+  userId        String
+  tokenHash     String   @unique
+  csrfTokenHash String
+  expiresAt     DateTime @db.Timestamptz(6)
+  revokedAt     DateTime? @db.Timestamptz(6)
+  createdAt     DateTime @default(now()) @db.Timestamptz(6)
+  user          User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([userId, expiresAt])
+}
+
+model OAuthFlow {
+  id            String   @id @default(cuid())
+  userId        String?
+  stateHash     String   @unique
+  encryptedCodeVerifier String          @db.Text
+  client                OAuthClientType @default(BROWSER)
+  expiresAt     DateTime @db.Timestamptz(6)
+  consumedAt    DateTime? @db.Timestamptz(6)
+  createdAt     DateTime @default(now()) @db.Timestamptz(6)
+  user          User?    @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([expiresAt, consumedAt])
+}
+
+model GitHubAccount {
+  id                       String               @id @default(cuid())
+  userId                   String
+  githubUserId             String
+  login                    String
+  githubAppInstallationId  Int?                 @unique
+  encryptedAccessToken     String               @db.Text
+  encryptedRefreshToken    String?              @db.Text
+  tokenExpiresAt           DateTime?            @db.Timestamptz(6)
+  scopes                   String[]             @default([])
+  status                   GitHubAccountStatus  @default(ACTIVE)
+  createdAt                DateTime             @default(now()) @db.Timestamptz(6)
+  updatedAt                DateTime             @updatedAt @db.Timestamptz(6)
+  user                     User                 @relation(fields: [userId], references: [id], onDelete: Restrict)
+  bots                     Bot[]
+  webhookDeliveries        WebhookDelivery[]
+
+  @@unique([userId, githubUserId])
+  @@index([userId, status])
+}
+
+model Bot {
+  id               String         @id @default(cuid())
+  userId           String
+  githubAccountId  String
+  name             String
+  avatarUrl        String?
+  repositoryId     String
+  repository       String
+  defaultBranch    String
+  systemPrompt     String         @db.Text
+  automation       Json           @default("{}") @db.JsonB
+  status           BotStatus      @default(IDLE)
+  createdAt        DateTime       @default(now()) @db.Timestamptz(6)
+  updatedAt        DateTime       @updatedAt @db.Timestamptz(6)
+  user             User           @relation(fields: [userId], references: [id], onDelete: Restrict)
+  githubAccount    GitHubAccount  @relation(fields: [githubAccountId], references: [id], onDelete: Restrict)
+  stages           Stage[]
+  notifications    Notification[]
+  auditEvents      AuditEvent[]
+
+  @@index([userId, status])
+  @@index([githubAccountId, repositoryId])
+}
+
+model Stage {
+  id                    String                  @id @default(cuid())
+  botId                 String
+  number                Int
+  title                 String
+  description           String                  @db.Text
+  acceptanceCriteria    String[]
+  status                StageStatus             @default(PENDING)
+  branchName            String?
+  testResults           Json?                   @db.JsonB
+  approvedAt            DateTime?               @db.Timestamptz(6)
+  createdAt             DateTime                @default(now()) @db.Timestamptz(6)
+  updatedAt             DateTime                @updatedAt @db.Timestamptz(6)
+  bot                   Bot                     @relation(fields: [botId], references: [id], onDelete: Restrict)
+  transitions           StageTransitionEvent[]
+  jobs                  BackgroundJob[]
+  pullRequests          PullRequest[]
+  notifications         Notification[]
+  auditEvents           AuditEvent[]
+
+  @@unique([botId, number])
+  @@index([botId, status, number])
+}
+
+model StageTransitionEvent {
+  id           String      @id @default(cuid())
+  stageId      String
+  fromStatus   StageStatus?
+  toStatus     StageStatus
+  details      Json?       @db.JsonB
+  createdAt    DateTime    @default(now()) @db.Timestamptz(6)
+  stage        Stage       @relation(fields: [stageId], references: [id], onDelete: Restrict)
+
+  @@index([stageId, createdAt])
+}
+
+model BackgroundJob {
+  id             String    @id @default(cuid())
+  stageId        String
+  idempotencyKey String    @unique
+  status         JobStatus @default(PENDING)
+  attempts       Int       @default(0)
+  maxAttempts    Int       @default(5)
+  availableAt    DateTime  @default(now()) @db.Timestamptz(6)
+  lockedAt       DateTime? @db.Timestamptz(6)
+  externalTaskId String?
+  lastError      String?   @db.Text
+  createdAt      DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime  @updatedAt @db.Timestamptz(6)
+  stage          Stage     @relation(fields: [stageId], references: [id], onDelete: Restrict)
+
+  @@index([status, availableAt])
+  @@index([stageId, status])
+}
+
+model PullRequest {
+  id                   String             @id @default(cuid())
+  stageId              String
+  repository           String
+  number               Int
+  title                String
+  url                  String
+  headBranch           String
+  baseBranch           String
+  status               PullRequestStatus  @default(OPEN)
+  ciStatus             String?
+  createdAt            DateTime           @default(now()) @db.Timestamptz(6)
+  updatedAt            DateTime           @updatedAt @db.Timestamptz(6)
+  stage                Stage              @relation(fields: [stageId], references: [id], onDelete: Restrict)
+  comments             PullRequestComment[]
+
+  @@unique([repository, number])
+  @@index([stageId, status])
+}
+
+model PullRequestComment {
+  id                 String      @id @default(cuid())
+  pullRequestId      String
+  githubCommentId    String
+  authorLogin        String
+  body               String      @db.Text
+  htmlUrl            String
+  postedAt           DateTime    @db.Timestamptz(6)
+  updatedAt          DateTime    @db.Timestamptz(6)
+  pullRequest        PullRequest @relation(fields: [pullRequestId], references: [id], onDelete: Restrict)
+
+  @@unique([pullRequestId, githubCommentId])
+  @@index([pullRequestId, postedAt])
+}
+
+model WebhookDelivery {
+  id                  String        @id @default(cuid())
+  githubAccountId     String
+  deliveryId          String
+  eventName           String
+  payloadSha256       String
+  receivedAt          DateTime      @default(now()) @db.Timestamptz(6)
+  processedAt         DateTime?     @db.Timestamptz(6)
+  githubAccount       GitHubAccount @relation(fields: [githubAccountId], references: [id], onDelete: Restrict)
+
+  @@unique([githubAccountId, deliveryId])
+  @@index([receivedAt])
+}
+
+model OAuthHandoff {
+  id         String    @id @default(cuid())
+  userId     String
+  tokenHash  String    @unique
+  stateHash  String
+  expiresAt  DateTime  @db.Timestamptz(6)
+  consumedAt DateTime? @db.Timestamptz(6)
+  createdAt  DateTime  @default(now()) @db.Timestamptz(6)
+  user       User      @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([expiresAt, consumedAt])
+  @@index([stateHash, consumedAt])
+}
+
+model Notification {
+  id           String    @id @default(cuid())
+  userId       String
+  botId        String?
+  stageId      String?
+  type         String
+  title        String
+  body         String    @db.Text
+  readAt       DateTime? @db.Timestamptz(6)
+  createdAt    DateTime  @default(now()) @db.Timestamptz(6)
+  user         User      @relation(fields: [userId], references: [id], onDelete: Restrict)
+  bot          Bot?      @relation(fields: [botId], references: [id], onDelete: Restrict)
+  stage        Stage?    @relation(fields: [stageId], references: [id], onDelete: Restrict)
+
+  @@index([userId, readAt, createdAt])
+}
+
+model PushDevice {
+  id                String         @id @default(cuid())
+  userId            String
+  platform          DevicePlatform
+  encryptedFcmToken String         @db.Text
+  tokenHash         String         @unique
+  createdAt         DateTime       @default(now()) @db.Timestamptz(6)
+  updatedAt         DateTime       @updatedAt @db.Timestamptz(6)
+  user              User           @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([userId, platform])
+}
+
+model AuditEvent {
+  id          String   @id @default(cuid())
+  userId      String
+  botId       String?
+  stageId     String?
+  action      String
+  targetType  String
+  targetId    String
+  requestId   String?
+  details     Json?    @db.JsonB
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+  user        User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+  bot         Bot?     @relation(fields: [botId], references: [id], onDelete: Restrict)
+  stage       Stage?   @relation(fields: [stageId], references: [id], onDelete: Restrict)
+
+  @@index([userId, createdAt])
+  @@index([targetType, targetId, createdAt])
+}

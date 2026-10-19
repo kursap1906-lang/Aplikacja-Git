@@ -1,0 +1,18 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Control Center: start",
+      "type": "shell",
+      "command": "bash scripts/dev-up.sh",
+      "presentation": { "reveal": "silent", "panel": "dedicated" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Control Center: restart",
+      "type": "shell",
+      "command": "bash scripts/dev-restart.sh",
+      "problemMatcher": []
+    }
+  ]
+}

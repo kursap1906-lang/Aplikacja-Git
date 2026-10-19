@@ -1,0 +1,10 @@
+.git
+.env
+.env.*
+!.env.example
+node_modules
+mobile/.dart_tool
+mobile/build
+backups
+coverage
+*.log

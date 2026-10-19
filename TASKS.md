@@ -11,14 +11,16 @@ Statusy: `DONE`, `IN_PROGRESS`, `BLOCKED`, `TODO`. Zadania oznaczamy jako wykona
 
 ## Faza 2 — Architektura i baza danych
 
-- [TODO] Model Prisma dla użytkowników, kont GitHub, botów, etapów, zdarzeń, PR, zadań i urządzeń powiadomień.
-- [TODO] Migracje PostgreSQL i testy trwałości przejść między statusami.
+- [DONE] Model Prisma dla użytkowników, bezpiecznych sesji i OAuth, kont GitHub, botów, etapów, PR, zadań, webhooków, powiadomień i audytu.
+- [DONE] Migracje PostgreSQL zwalidowane i zastosowane w lokalnej bazie z nazwanym wolumenem; potwierdzono 16 tabel.
+- [TODO] Testy integracyjne trwałości przejść stanów na PostgreSQL.
 
 ## Faza 3 — Backend i autoryzacja
 
-- [TODO] API Fastify z walidacją, limitowaniem żądań, uprawnieniami i health checks.
-- [TODO] Bezpieczny przepływ OAuth GitHub, CSRF, ponowna autoryzacja i szyfrowanie tokenów.
-- [TODO] Testy tras, autoryzacji i API.
+- [DONE] API Fastify z walidacją Zod, limitowaniem żądań, kontrolą uprawnień i health checks.
+- [IN_PROGRESS] OAuth z PKCE, CSRF, przechowywaniem sesji i szyfrowaniem tokenów; do rzeczywistego logowania potrzebny GitHub OAuth client.
+- [DONE] Testy API/OAuth/CSRF/Codespaces Origin, test TypeScript i testy jednostkowe: 24/24 zaliczone; `GET /` przekierowuje do UI.
+- [DONE] Pełne E2E rejestracji w Chromium i PostgreSQL: `201` rejestracja, `200` sesja i widoczny dashboard; konto testowe posprzątano.
 
 ## Faza 4 — Integracja GitHub i Copilot
 
@@ -29,15 +31,18 @@ Statusy: `DONE`, `IN_PROGRESS`, `BLOCKED`, `TODO`. Zadania oznaczamy jako wykona
 
 ## Faza 5 — System botów i etapów
 
-- [TODO] CRUD botów, repozytoriów, promptów i uporządkowanych etapów.
-- [TODO] Historia audytu, retry i trwałe wznowienie zadań po restarcie.
-- [TODO] Akceptacja etapu nie scala PR i nie uruchamia następnego etapu bez jawnej akcji.
+- [DONE] API tworzenia botów z wieloma etapami oraz weryfikacją uprawnień, repozytorium i konta GitHub.
+- [IN_PROGRESS] Historia audytu, PR, etapy i jawne zatwierdzanie są zapisane w PostgreSQL; trwałe retry/wznowienie pracy workerów wymaga backendu zadaniowego.
+- [DONE] Zatwierdzanie etapu jest osobne od scalania PR; kolejne etapy pozostają blokowane do zatwierdzenia poprzedniego.
 
 ## Faza 6 — Flutter UI/UX
 
-- [TODO] Flutter, Material 3, Riverpod i GoRouter; panel desktopowy i nawigacja mobilna po polsku.
-- [TODO] Widoki kont GitHub, botów, etapów, PR, zdarzeń, diagnostyki i ustawień.
-- [BLOCKED] Lokalny build Flutter wymaga zainstalowanego Flutter SDK; iOS wymaga macOS.
+- [DONE] Flutter Web uruchomiony, dashboard z nawigacją desktop/mobile, Material 3, Riverpod i GoRouter; testy 3/3 przechodzą, analizator bez błędów.
+- [DONE] Usunięto biały ekran wywołany nieprawidłowym browser locale i inicjalizacją Firebase; screenshoty Chromium potwierdziły render loginu na desktopie/mobile bez błędów konsoli.
+- [DONE] Codespaces ma jeden automatyczny start przy uruchomieniu kontenera i właściwe przekierowanie root API do portu UI.
+- [DONE] Fingerprintowy start/restart zachowuje jeden proces API/gateway i wolumen PostgreSQL, nie wymaga ręcznego zabijania portów.
+- [IN_PROGRESS] Widoki kont GitHub, botów, etapów, PR, zdarzeń i ustawień są połączone z API; produkcyjne logowanie czeka na OAuth client.
+- [TODO] Potwierdzić eksport buildu Android/Windows; iOS wymaga macOS i podpisu Apple Developer.
 
 ## Faza 7 — Powiadomienia
 
@@ -62,4 +67,11 @@ Statusy: `DONE`, `IN_PROGRESS`, `BLOCKED`, `TODO`. Zadania oznaczamy jako wykona
 
 ## Jawne braki
 
-Nie potwierdzono oficjalnego endpointu publicznego dla wszystkich operacji GitHub Copilot coding agent. Nie utworzono aplikacji GitHub, OAuth client, projektu Firebase ani konta Apple. Nie sprawdzono VPS. Nie powstały artefakty buildów ani wdrożenie.
+Nie znaleziono oficjalnego endpointu uruchamiania zadań coding agent. Brakuje OAuth client GitHub, konfiguracji Firebase, produkcyjnej trwałej bazy i artefaktów buildów Android/Windows/iOS. VPS jest celowo nietknięty, aby umożliwić ręczne przeniesienie projektu.
+
+## Podgląd lokalny
+
+- Flutter Web: `https://legendary-space-guacamole-p79p5g9j9qw6f6rvq-4173.app.github.dev/`
+- Backend: port `3000`; health checks `/health/live` i `/health/ready` zweryfikowane.
+- Lokalny PostgreSQL: `127.0.0.1:55433`, kontener z nazwanym wolumenem `ccc-dev-pgdata`; nie zastępuje kopii zapasowej ani bazy produkcyjnej.
+- Codespaces automatycznie uruchamia `scripts/dev-up.sh` po starcie; port `4173` to UI, a `3000` to API z przekierowaniem `GET /` do UI.
