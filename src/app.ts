@@ -79,11 +79,12 @@ const sessionExchangeSchema = z.object({
   code: z.string().min(32).max(200),
   state: z.string().min(32).max(200),
 });
-const localCredentialsSchema = z.object({
+const loginSchema = z.object({
   email: z.string().trim().toLowerCase().pipe(z.email().max(254)),
-  password: z.string().min(12).max(256),
+  password: z.string().min(1).max(256),
 });
-const registrationSchema = localCredentialsSchema.extend({
+const registrationSchema = loginSchema.extend({
+  password: z.string().min(12).max(256),
   displayName: z.string().trim().min(1).max(80).optional(),
 });
 
@@ -402,7 +403,7 @@ export function createApp(options: {
   app.post('/api/auth/login', {
     config: { rateLimit: { max: 5, timeWindow: '15 minutes' } },
   }, async (request, reply) => {
-    const input = parseRequest(localCredentialsSchema, request.body);
+    const input = parseRequest(loginSchema, request.body);
     const user = await prisma.user.findUnique({
       where: { email: input.email },
       select: { id: true, passwordHash: true },

@@ -218,8 +218,8 @@ test('rejects weak local registration passwords', async (context) => {
   assert.equal(response.json().error.code, 'INVALID_REQUEST');
 });
 
-test('signs a local user in with case-insensitive email and issues a fresh session', async (context) => {
-  const passwordHash = await hashPassword('correct horse battery staple');
+test('signs in with a legacy short password and case-insensitive email', async (context) => {
+  const passwordHash = await hashPassword('short');
   let createdSession: Record<string, unknown> | undefined;
   const transaction = {
     authSession: {
@@ -246,7 +246,7 @@ test('signs a local user in with case-insensitive email and issues a fresh sessi
   const response = await app.inject({
     method: 'POST',
     url: '/api/auth/login',
-    payload: { email: 'PERSON@example.com', password: 'correct horse battery staple' },
+    payload: { email: 'PERSON@example.com', password: 'short' },
   });
 
   assert.equal(response.statusCode, 200);
