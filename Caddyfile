@@ -19,12 +19,15 @@
 	}
 	@editor path /editor /editor/*
 	handle @editor {
-		forward_auth control-center-staging-api:3000 {
-			uri /api/auth/editor/verify
-		}
-		reverse_proxy control-center-staging-editor:8080 {
-			header_up -Cookie
-			header_up -Authorization
+		route {
+			uri strip_prefix /editor
+			forward_auth control-center-staging-api:3000 {
+				uri /api/auth/editor/verify
+			}
+			reverse_proxy control-center-staging-editor:8080 {
+				header_up -Cookie
+				header_up -Authorization
+			}
 		}
 	}
 	handle {

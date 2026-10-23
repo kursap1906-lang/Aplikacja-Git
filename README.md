@@ -159,8 +159,9 @@ gałąź `phone-editor`. Wolumen `editor_workspace` zachowuje zmiany po odtworze
 kontenera; repozytorium nie jest automatycznie synchronizowane zdalnie.
 Zaloguj się do Control Center i otwórz **Ustawienia → Edytor kodu**. Backend
 wystawia wtedy na cztery godziny ciasteczko HttpOnly; proxy sprawdza je przy
-każdym żądaniu do edytora. Nie wystawiaj portu code-server bezpośrednio ani nie
-zmieniaj `--auth none` bez utrzymania kontroli dostępu Caddy.
+każdym żądaniu do edytora. Caddy usuwa prefiks `/editor` przed przekazaniem
+żądania do code-server. Nie wystawiaj jego portu bezpośrednio ani nie zmieniaj
+`--auth none` bez utrzymania kontroli dostępu Caddy.
 
 Po dodaniu rekordów DNS dla stagingu i `editor.staging.copilotcontrolcenter.com`
 uruchom Caddy z domyślnym `Caddyfile`, który kieruje staging i edytor wyłącznie
