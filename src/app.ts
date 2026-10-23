@@ -23,9 +23,21 @@ import { StageTransitionError, transitionStage, type StageSnapshot } from './sta
 
 const SESSION_COOKIE = 'ccc_session';
 const CSRF_COOKIE = 'ccc_csrf';
+const EDITOR_SESSION_COOKIE = 'ccc_editor_session';
 const OAUTH_STATE_COOKIE = 'ccc_oauth_state';
 const OAUTH_VERIFIER_COOKIE = 'ccc_oauth_verifier';
+const copilotTaskStateLabels = {
+  queued: 'oczekuje w kolejce',
+  in_progress: 'w trakcie',
+  completed: 'zakończone',
+  failed: 'zakończone błędem',
+  idle: 'bezczynne',
+  waiting_for_user: 'oczekuje na działanie użytkownika',
+  timed_out: 'przekroczono limit czasu',
+  cancelled: 'anulowane',
+} satisfies Record<CopilotTaskState, string>;
 const SESSION_LIFETIME_SECONDS = 60 * 60 * 24 * 30;
+const EDITOR_SESSION_LIFETIME_SECONDS = 60 * 60 * 4;
 const OAUTH_LIFETIME_MS = 10 * 60 * 1000;
 const HANDOFF_LIFETIME_MS = 60 * 1000;
 
@@ -109,6 +121,16 @@ function cookieOptions(config: AppConfig) {
     path: '/api',
     secure: config.NODE_ENV === 'production',
     sameSite: 'lax' as const,
+  };
+}
+
+function editorCookieOptions(config: AppConfig) {
+  return {
+    path: '/editor',
+    domain: config.NODE_ENV === 'production' ? new URL(config.APP_ORIGIN).hostname : undefined,
+    secure: config.NODE_ENV === 'production',
+    httpOnly: true,
+    sameSite: 'strict' as const,
   };
 }
 
@@ -270,13 +292,13 @@ export function createApp(options: {
 
     if (error instanceof StageTransitionError) {
       return reply.status(409).send({
-        error: { code: 'INVALID_STAGE_TRANSITION', message: error.message },
+        error: { code: 'INVALID_STAGE_TRANSITION', message: 'Zmiana statusu etapu nie jest dozwolona.' },
       });
     }
 
     request.log.error({ err: error }, 'API request failed');
     return reply.status(500).send({
-      error: { code: 'INTERNAL_SERVER_ERROR', message: 'The server could not complete the request.' },
+      error: { code: 'INTERNAL_SERVER_ERROR', message: 'Serwer nie mógł wykonać żądania.' },
     });
   });
 
@@ -317,7 +339,12 @@ export function createApp(options: {
     authentication: 'email_password_with_github_oauth',
     repositories: true,
     bots: true,
-    stageApproval: true,
+    stageApproval: false,
+    reviewEvidence: {
+      ci: false,
+      preview: false,
+      manualTests: false,
+    },
     copilotAgent: copilotCapabilities,
   }));
 
@@ -680,6 +707,47 @@ export function createApp(options: {
     return { user, githubAccounts };
   });
 
+  app.post('/api/auth/editor/session', {
+    preHandler: async (request) => {
+      await loadOptionalSession(request, prisma);
+      const session = requireSession(request);
+      requireCsrf(request, session);
+    },
+  }, async (request, reply) => {
+    const session = requireSession(request);
+
+    if (!config.EDITOR_URL) {
+      throw new ApiError(503, 'EDITOR_NOT_CONFIGURED', 'Edytor kodu nie jest skonfigurowany.');
+    }
+
+    reply.setCookie(EDITOR_SESSION_COOKIE, session.rawToken, {
+      ...editorCookieOptions(config),
+      maxAge: EDITOR_SESSION_LIFETIME_SECONDS,
+    });
+
+    return { editorUrl: config.EDITOR_URL };
+  });
+
+  app.get('/api/auth/editor/verify', async (request, reply) => {
+    const token = request.cookies[EDITOR_SESSION_COOKIE];
+
+    if (!token) {
+      throw new ApiError(401, 'UNAUTHENTICATED', 'Zaloguj się do Control Center, aby otworzyć edytor.');
+    }
+
+    const session = await prisma.authSession.findFirst({
+      where: { tokenHash: hashToken(token), revokedAt: null, expiresAt: { gt: new Date() } },
+      select: { id: true },
+    });
+
+    if (!session) {
+      reply.clearCookie(EDITOR_SESSION_COOKIE, editorCookieOptions(config));
+      throw new ApiError(401, 'UNAUTHENTICATED', 'Sesja edytora wygasła. Otwórz edytor ponownie z Control Center.');
+    }
+
+    return reply.status(204).send();
+  });
+
   app.post('/api/auth/logout', {
     preHandler: async (request) => {
       await loadOptionalSession(request, prisma);
@@ -695,6 +763,7 @@ export function createApp(options: {
     const cookies = cookieOptions(config);
     reply.clearCookie(SESSION_COOKIE, cookies);
     reply.clearCookie(CSRF_COOKIE, cookies);
+    reply.clearCookie(EDITOR_SESSION_COOKIE, editorCookieOptions(config));
 
     return { ok: true };
   });
@@ -784,7 +853,18 @@ export function createApp(options: {
             title: true,
             status: true,
             branchName: true,
-            pullRequests: { select: { number: true, url: true, status: true, ciStatus: true } },
+            pullRequests: {
+              select: {
+                id: true,
+                number: true,
+                title: true,
+                url: true,
+                headBranch: true,
+                baseBranch: true,
+                status: true,
+                ciStatus: true,
+              },
+            },
           },
         },
         _count: { select: { notifications: true } },
@@ -907,6 +987,15 @@ export function createApp(options: {
           include: {
             transitions: { orderBy: { createdAt: 'asc' } },
             pullRequests: { orderBy: { number: 'desc' } },
+            jobs: {
+              where: {
+                status: 'FAILED',
+                externalTaskId: null,
+                lastError: 'SUBMISSION_RESULT_UNCONFIRMED',
+              },
+              select: { id: true },
+              take: 1,
+            },
           },
         },
       },
@@ -916,7 +1005,15 @@ export function createApp(options: {
       throw new ApiError(404, 'BOT_NOT_FOUND', 'Bot was not found.');
     }
 
-    return { bot };
+    return {
+      bot: {
+        ...bot,
+        stages: bot.stages.map(({ jobs, ...stage }) => ({
+          ...stage,
+          submissionUnconfirmed: jobs.length > 0,
+        })),
+      },
+    };
   });
 
   app.get('/api/bots/:botId/pull-requests/:pullRequestId', {
@@ -1225,6 +1322,14 @@ export function createApp(options: {
     const { stageId } = parseRequest(z.object({ stageId: z.string().cuid() }), request.params);
     const { reason } = parseRequest(transitionBodySchema, request.body ?? {});
 
+    if (action === 'APPROVED') {
+      throw new ApiError(
+        409,
+        'REVIEW_EVIDENCE_REQUIRED',
+        'Zatwierdzenie wymaga zielonego CI, aktualnego preview, testów manualnych i uprawnień recenzenta.',
+      );
+    }
+
     return prisma.$transaction(async (transaction) => {
       const stage = await transaction.stage.findFirst({
         where: { id: stageId, bot: { userId: session.userId } },
@@ -1245,7 +1350,7 @@ export function createApp(options: {
         where: { id: stage.id, status: stage.status },
         data: {
           status: transition.status,
-          approvedAt: action === 'APPROVED' ? occurredAt : null,
+          approvedAt: null,
         },
       });
 
@@ -1318,6 +1423,10 @@ export function createApp(options: {
   }, async (request, reply) => {
     const session = requireSession(request);
     const { stageId } = parseRequest(z.object({ stageId: z.string().cuid() }), request.params);
+    const { confirmedNoTaskExists } = parseRequest(
+      z.object({ confirmedNoTaskExists: z.boolean().default(false) }),
+      request.body ?? {},
+    );
     const claim = await prisma.$transaction(async (transaction) => {
       const stage = await transaction.stage.findFirst({
         where: { id: stageId, bot: { userId: session.userId } },
@@ -1335,11 +1444,6 @@ export function createApp(options: {
         throw new ApiError(404, 'STAGE_NOT_FOUND', 'Stage was not found.');
       }
 
-      const stages: StageSnapshot[] = await transaction.stage.findMany({
-        where: { botId: stage.botId },
-        select: { number: true, status: true },
-      });
-      const transition = transitionStage(stage, 'RUNNING', stages);
       const unconfirmedJob = await transaction.backgroundJob.findFirst({
         where: {
           stageId: stage.id,
@@ -1350,16 +1454,55 @@ export function createApp(options: {
         select: { id: true },
       });
 
-      if (unconfirmedJob) {
+      if (unconfirmedJob && !confirmedNoTaskExists) {
         throw new ApiError(
           409,
           'COPILOT_TASK_SUBMISSION_UNCONFIRMED',
-          'The previous request may have reached GitHub. Check GitHub Agent Tasks before attempting another run.',
+          'Poprzednie zgłoszenie mogło dotrzeć do GitHuba. Sprawdź zadania Copilot w repozytorium, zanim spróbujesz ponownie.',
         );
       }
 
+      let stages: StageSnapshot[] = await transaction.stage.findMany({
+        where: { botId: stage.botId },
+        select: { number: true, status: true },
+      });
+      let stageToRun = stage;
+
+      if (unconfirmedJob) {
+        if (stage.status !== 'RUNNING') {
+          throw new ApiError(409, 'STAGE_CHANGED_CONCURRENTLY', 'Etap zmienił status. Odśwież widok i spróbuj ponownie.');
+        }
+
+        const failedTransition = transitionStage(stage, 'FAILED', stages);
+        const markedFailed = await transaction.stage.updateMany({
+          where: { id: stage.id, status: 'RUNNING' },
+          data: { status: 'FAILED' },
+        });
+        if (markedFailed.count !== 1) {
+          throw new ApiError(409, 'STAGE_CHANGED_CONCURRENTLY', 'Etap zmienił status. Odśwież widok i spróbuj ponownie.');
+        }
+        await transaction.stageTransitionEvent.create({
+          data: {
+            stageId: stage.id,
+            fromStatus: failedTransition.previousStatus,
+            toStatus: failedTransition.status,
+            details: { actor: 'user', reason: 'confirmed_no_task_in_github' },
+          },
+        });
+        await transaction.backgroundJob.update({
+          where: { id: unconfirmedJob.id },
+          data: { lastError: 'SUBMISSION_RETRY_CONFIRMED' },
+        });
+        stages = stages.map((item) =>
+          item.number === stage.number ? { ...item, status: 'FAILED' } : item,
+        );
+        stageToRun = { ...stage, status: 'FAILED' };
+      }
+
+      const transition = transitionStage(stageToRun, 'RUNNING', stages);
+
       const updated = await transaction.stage.updateMany({
-        where: { id: stage.id, status: stage.status },
+        where: { id: stage.id, status: stageToRun.status },
         data: { status: 'RUNNING', approvedAt: null },
       });
 
@@ -1399,7 +1542,7 @@ export function createApp(options: {
         where: { id: claim.stage.id, status: 'RUNNING' },
         data: { status: claim.previousStatus },
       });
-      throw new ApiError(401, 'GITHUB_REAUTH_REQUIRED', 'Reconnect the associated GitHub account to start this task.');
+      throw new ApiError(401, 'GITHUB_REAUTH_REQUIRED', 'Połącz ponownie konto GitHub, aby uruchomić to zadanie.');
     }
 
     if (account.tokenExpiresAt && account.tokenExpiresAt <= new Date()) {
@@ -1412,7 +1555,7 @@ export function createApp(options: {
         where: { id: claim.stage.id, status: 'RUNNING' },
         data: { status: claim.previousStatus },
       });
-      throw new ApiError(401, 'GITHUB_REAUTH_REQUIRED', 'Reconnect the associated GitHub account to start this task.');
+      throw new ApiError(401, 'GITHUB_REAUTH_REQUIRED', 'Połącz ponownie konto GitHub, aby uruchomić to zadanie.');
     }
 
     const bot = claim.stage.bot;
@@ -1468,25 +1611,25 @@ export function createApp(options: {
 
         const rejectedStatus = error instanceof GitHubCopilotApiError ? error.statusCode : 502;
         if (rejectedStatus === 401) {
-          throw new ApiError(401, 'GITHUB_REAUTH_REQUIRED', 'Reconnect the associated GitHub account to start this task.');
+          throw new ApiError(401, 'GITHUB_REAUTH_REQUIRED', 'Połącz ponownie konto GitHub, aby uruchomić to zadanie.');
         }
         if (rejectedStatus === 403) {
           throw new ApiError(
             403,
             'GITHUB_AGENT_TASK_FORBIDDEN',
-            'GitHub denied this task. Verify the Copilot plan and Agent tasks repository permissions.',
+            'GitHub odrzucił zadanie. Sprawdź plan Copilot i uprawnienia „Agent tasks” w repozytorium.',
           );
         }
         if (rejectedStatus === 429) {
-          throw new ApiError(503, 'GITHUB_AGENT_TASK_RATE_LIMITED', 'GitHub temporarily rate-limited task creation.');
+          throw new ApiError(503, 'GITHUB_AGENT_TASK_RATE_LIMITED', 'GitHub tymczasowo ograniczył liczbę uruchamianych zadań. Spróbuj później.');
         }
-        throw new ApiError(502, 'GITHUB_AGENT_TASK_REJECTED', 'GitHub rejected the coding-agent task request.');
+        throw new ApiError(502, 'GITHUB_AGENT_TASK_REJECTED', 'GitHub odrzucił żądanie uruchomienia zadania.');
       }
 
       throw new ApiError(
         502,
         'COPILOT_TASK_SUBMISSION_UNCONFIRMED',
-        'The request may have reached GitHub. Check GitHub Agent Tasks before attempting another run.',
+        'Nie udało się potwierdzić, czy GitHub przyjął zadanie. Sprawdź zadania Copilot w repozytorium, zanim spróbujesz ponownie.',
       );
     }
 
@@ -1501,8 +1644,8 @@ export function createApp(options: {
           botId: bot.id,
           stageId: claim.stage.id,
           type: 'COPILOT_TASK_STARTED',
-          title: 'Copilot started a task',
-          body: `GitHub accepted the task for ${bot.repository}.`,
+          title: 'Copilot rozpoczął zadanie',
+          body: `GitHub przyjął zadanie dla repozytorium ${bot.repository}.`,
         },
       });
       await transaction.auditEvent.create({
@@ -1534,7 +1677,16 @@ export function createApp(options: {
       include: {
         bot: { include: { githubAccount: true } },
         jobs: {
-          where: { externalTaskId: { not: null } },
+          where: {
+            OR: [
+              { externalTaskId: { not: null } },
+              {
+                status: 'FAILED',
+                externalTaskId: null,
+                lastError: 'SUBMISSION_RESULT_UNCONFIRMED',
+              },
+            ],
+          },
           orderBy: { createdAt: 'desc' },
           take: 1,
         },
@@ -1546,16 +1698,23 @@ export function createApp(options: {
     }
     const job = stage.jobs[0];
     if (!job?.externalTaskId) {
-      throw new ApiError(404, 'COPILOT_TASK_NOT_FOUND', 'No confirmed Copilot task is recorded for this stage.');
+      if (job?.lastError === 'SUBMISSION_RESULT_UNCONFIRMED') {
+        throw new ApiError(
+          409,
+          'COPILOT_TASK_SUBMISSION_UNCONFIRMED',
+          'Nie wiadomo, czy GitHub przyjął poprzednie zadanie. Sprawdź zadania Copilot w repozytorium przed ponowieniem.',
+        );
+      }
+      throw new ApiError(404, 'COPILOT_TASK_NOT_FOUND', 'Nie zapisano potwierdzonego zadania Copilot dla tego etapu.');
     }
 
     const account = stage.bot.githubAccount;
     if (account.status !== 'ACTIVE') {
-      throw new ApiError(401, 'GITHUB_REAUTH_REQUIRED', 'Reconnect the associated GitHub account to read this task.');
+      throw new ApiError(401, 'GITHUB_REAUTH_REQUIRED', 'Połącz ponownie konto GitHub, aby odczytać status zadania.');
     }
     if (account.tokenExpiresAt && account.tokenExpiresAt <= new Date()) {
       await prisma.gitHubAccount.update({ where: { id: account.id }, data: { status: 'REAUTH_REQUIRED' } });
-      throw new ApiError(401, 'GITHUB_REAUTH_REQUIRED', 'Reconnect the associated GitHub account to read this task.');
+      throw new ApiError(401, 'GITHUB_REAUTH_REQUIRED', 'Połącz ponownie konto GitHub, aby odczytać status zadania.');
     }
 
     let task;
@@ -1568,13 +1727,13 @@ export function createApp(options: {
     } catch (error) {
       if (error instanceof GitHubCopilotApiError && error.statusCode === 401) {
         await prisma.gitHubAccount.update({ where: { id: account.id }, data: { status: 'REAUTH_REQUIRED' } });
-        throw new ApiError(401, 'GITHUB_REAUTH_REQUIRED', 'Reconnect the associated GitHub account to read this task.');
+        throw new ApiError(401, 'GITHUB_REAUTH_REQUIRED', 'Połącz ponownie konto GitHub, aby odczytać status zadania.');
       }
       if (error instanceof GitHubCopilotApiError && error.statusCode === 403) {
-        throw new ApiError(403, 'GITHUB_AGENT_TASK_FORBIDDEN', 'GitHub denied access to this task.');
+        throw new ApiError(403, 'GITHUB_AGENT_TASK_FORBIDDEN', 'GitHub odmówił dostępu do tego zadania.');
       }
       if (error instanceof GitHubCopilotApiError && error.statusCode === 404) {
-        throw new ApiError(404, 'COPILOT_TASK_NOT_FOUND', 'GitHub could not find this task for the selected repository.');
+        throw new ApiError(404, 'COPILOT_TASK_NOT_FOUND', 'Nie znaleziono tego zadania GitHub w wybranym repozytorium.');
       }
       throw error;
     }
@@ -1626,11 +1785,11 @@ export function createApp(options: {
               stageId: stage.id,
               type: `COPILOT_TASK_${task.state.toUpperCase()}`,
               title: task.state === 'completed'
-                ? 'Copilot completed the task'
-                : `Copilot task ${task.state.replaceAll('_', ' ')}`,
+                ? 'Copilot zakończył zadanie'
+                : `Zadanie Copilot: ${copilotTaskStateLabels[task.state]}`,
               body: task.state === 'completed'
-                ? 'Review the result and pull request before approving the stage.'
-                : `GitHub reports the task state as ${task.state.replaceAll('_', ' ')}.`,
+                ? 'Sprawdź wynik pracy i pull request przed zatwierdzeniem etapu.'
+                : `GitHub zgłasza, że zadanie ${copilotTaskStateLabels[task.state]}.`,
             },
           });
           await transaction.auditEvent.create({

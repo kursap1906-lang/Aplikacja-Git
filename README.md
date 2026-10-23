@@ -58,6 +58,24 @@ Wdrożeniowy obraz i migracje zweryfikowano również z jednorazową PostgreSQL 
 izolowanej sieci Docker, bez host-portów i trwałego wolumenu. Test nie zastępuje
 stagingu, HTTPS ani weryfikacji OAuth na prawdziwym koncie.
 
+## Zakres funkcji i warunki zatwierdzania
+
+Nawigacja strony zawiera 15 ekranów zdefiniowanych w specyfikacji. Ekrany botów,
+repozytoriów, etapów, pull requestów, Review Center, kont GitHub, powiadomień
+i Code Center korzystają z istniejących danych API. Konto GitHub musi być
+połączone, a edytor otwiera osobny, autoryzowany workspace na obecnym hostingu.
+
+Zespoły, trwałe projekty/PDF, współpraca agentów, izolowane runner-y CI/CD,
+preview PR, harmonogramy i koszty wymagają dodatkowych modeli lub usług.
+Interfejs informuje o ich braku; nie zapisuje pozornie formularzy, nie pokazuje
+fikcyjnych kosztów i nie udaje, że uruchomił preview.
+
+Zatwierdzenie etapu jest zablokowane również po stronie API do czasu, aż serwer
+będzie przechowywał i weryfikował zielone CI, aktualny deployment przypięty do
+commit SHA, testy manualne oraz uprawnienia recenzenta. Sam status etapu lub
+kliknięcie w przeglądarce nie stanowią dowodu akceptacji. Zmiany kodu nadal
+publikujemy do repozytorium GitHub, a aplikacja pozostaje na obecnym hostingu.
+
 ## GitHub Copilot coding agent
 
 GitHub udostępnia publicznie podglądowe (public preview) REST API do
@@ -95,14 +113,16 @@ bundle razem z `/api/*` i health-checkami. Zewnętrzny, wspólny projekt Caddy
 łączy się z osobnymi sieciami brzegowymi staging i production; PostgreSQL
 pozostaje bez `ports` w prywatnej sieci danego projektu. Named volumes i nazwy
 projektów są oddzielne. Jednorazowy kontener migracyjny wdraża zatwierdzone
-migracje PostgreSQL przed uruchomieniem API.
+migracje PostgreSQL przed uruchomieniem API. Edytor VS Code działa jako
+osobny kontener i osobny checkout repozytorium; nie ma dostępu do sieci
+aplikacyjnej ani poświadczeń API lub bazy danych.
 
 Utwórz osobną GitHub OAuth App dla każdego środowiska. Ustaw:
 
 - Production Homepage URL: `https://<PRODUCTION_DOMAIN>`
 - Production Authorization callback URL: `https://<PRODUCTION_DOMAIN>/api/auth/github/callback`
-- Staging Homepage URL: `https://<STAGING_DOMAIN>`
-- Staging Authorization callback URL: `https://<STAGING_DOMAIN>/api/auth/github/callback`
+- Staging Homepage URL: `https://staging.copilotcontrolcenter.com`
+- Staging Authorization callback URL: `https://staging.copilotcontrolcenter.com/api/auth/github/callback`
 
 Po zatwierdzeniu zmian kodu uruchom `python3 scripts/create-deployment-env.py`
 w chronionym terminalu. Skrypt pyta o domeny i ukrywa oba OAuth Client ID/Secret
@@ -110,8 +130,12 @@ podczas wpisywania, generuje odrębne losowe hasła PostgreSQL, klucze szyfrowan
 i sekrety webhooków, a następnie tworzy trzy pliki z prawami `0600`. Obecne
 pliki nigdy nie są nadpisywane; skrypt odmawia pracy przy brudnym drzewie Git.
 Wygenerowane pliki nie są śledzone przez Git. Skrypt nie sprawdza DNS i nie
-uruchamia kontenerów. Właściciel musi potwierdzić rekordy A/AAAA obu domen
-przed uruchomieniem Caddy.
+uruchamia kontenerów. Właściciel musi dodać rekordy A/AAAA dla domeny staging
+i `editor.<domena-staging>` przed uruchomieniem Caddy.
+Jeśli chronione pliki `.env.staging` lub `.env.proxy` zostały utworzone przed
+dodaniem edytora, dopisz do nich odpowiednio
+`EDITOR_URL=https://editor.<domena-staging>/editor/` i
+`EDITOR_DOMAIN=editor.<domena-staging>`. Nie umieszczaj tych plików w Git.
 
 W plikach staging/production zachowaj różne `APP_PROXY_ALIAS`, bazy,
 użytkowników, edge networks i losowe sekrety. `APP_IMAGE_TAG` jest ustawiany na
@@ -125,12 +149,23 @@ Najpierw zbuduj Web i uruchom wyłącznie staging:
 (cd mobile && flutter build web --release)
 sudo docker network create ccc-staging-edge
 sudo docker network create ccc-production-edge
+sudo docker network create ccc-editor-edge
 sudo env APP_ENV_FILE=.env.staging docker compose -p ccc-staging --env-file .env.staging up -d --build
+sudo docker compose -f docker-compose.editor.yml -p ccc-staging-editor --env-file .env.staging up -d --build
 ```
 
-Po potwierdzeniu rekordów DNS obu domen uruchom Caddy z domyślnym `Caddyfile`, który
-kieruje wyłącznie staging. Sprawdź HTTPS, API, UI, rejestrację/logowanie oraz
-backup i restore na osobnej bazie staging:
+Edytor klonuje publiczną gałąź `main` do osobnego wolumenu i tworzy lokalną
+gałąź `phone-editor`. Wolumen `editor_workspace` zachowuje zmiany po odtworzeniu
+kontenera; repozytorium nie jest automatycznie synchronizowane zdalnie.
+Zaloguj się do Control Center i otwórz **Ustawienia → Edytor kodu**. Backend
+wystawia wtedy na cztery godziny ciasteczko HttpOnly; proxy sprawdza je przy
+każdym żądaniu do edytora. Nie wystawiaj portu code-server bezpośrednio ani nie
+zmieniaj `--auth none` bez utrzymania kontroli dostępu Caddy.
+
+Po dodaniu rekordów DNS dla stagingu i `editor.staging.copilotcontrolcenter.com`
+uruchom Caddy z domyślnym `Caddyfile`, który kieruje staging i edytor wyłącznie
+do stagingu. Sprawdź HTTPS, API, UI, rejestrację/logowanie oraz backup i restore
+na osobnej bazie staging:
 
 ```bash
 sudo env PROXY_ENV_FILE=.env.proxy docker compose -f docker-compose.proxy.yml -p ccc-proxy --env-file .env.proxy up -d

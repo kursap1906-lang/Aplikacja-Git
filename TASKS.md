@@ -20,7 +20,7 @@ Statusy: `DONE`, `IN_PROGRESS`, `BLOCKED`, `TODO`. Zadania oznaczamy jako wykona
 
 - [DONE] API Fastify z walidacją Zod, limitowaniem żądań, kontrolą uprawnień i health checks.
 - [DONE] OAuth z PKCE, CSRF, przechowywaniem sesji i szyfrowaniem tokenów; rzeczywiste logowanie czeka na poświadczenia właściciela.
-- [DONE] Testy API/OAuth/CSRF/Codespaces Origin, TypeScript i testy jednostkowe: 32/32 zaliczone; `GET /` przekierowuje do UI.
+- [DONE] Testy API/OAuth/CSRF/Codespaces Origin, TypeScript i testy jednostkowe: 37/37 zaliczone; `GET /` przekierowuje do UI.
 - [DONE] Pełne E2E rejestracji w Chromium i PostgreSQL: `201` rejestracja, `200` sesja i widoczny dashboard; konto testowe posprzątano.
 
 ## Faza 4 — Integracja GitHub i Copilot
@@ -34,15 +34,16 @@ Statusy: `DONE`, `IN_PROGRESS`, `BLOCKED`, `TODO`. Zadania oznaczamy jako wykona
 ## Faza 5 — System botów i etapów
 
 - [DONE] API tworzenia botów z wieloma etapami oraz weryfikacją uprawnień, repozytorium i konta GitHub.
-- [IN_PROGRESS] Historia audytu, PR, etapy i jawne zatwierdzanie są zapisane w PostgreSQL; trwałe retry/wznowienie pracy workerów wymaga backendu zadaniowego.
+- [BLOCKED] Historia audytu, PR i etapów jest zapisana w PostgreSQL. Zatwierdzanie pozostaje zablokowane, dopóki backend nie potwierdza CI, preview przypiętego do SHA, testów manualnych i uprawnień recenzenta.
 - [DONE] Zatwierdzanie etapu jest osobne od scalania PR; kolejne etapy pozostają blokowane do zatwierdzenia poprzedniego.
 
 ## Faza 6 — Flutter UI/UX
 
-- [DONE] Flutter Web, dashboard z nawigacją desktop/mobile, Material 3, Riverpod i GoRouter; testy 4/4 przechodzą, analizator bez błędów, release bundle zbudowany.
+- [DONE] Flutter Web, dashboard z nawigacją desktop/mobile, Material 3, Riverpod i GoRouter; testy 7/7 przechodzą, analizator bez błędów, release bundle zbudowany.
 - [DONE] Usunięto biały ekran wywołany nieprawidłowym browser locale i inicjalizacją Firebase; screenshoty Chromium potwierdziły render loginu na desktopie/mobile bez błędów konsoli.
 - [DONE] Codespaces ma jeden automatyczny start przy uruchomieniu kontenera i właściwe przekierowanie root API do portu UI.
 - [DONE] Fingerprintowy start/restart zachowuje jeden proces API/gateway i wolumen PostgreSQL, nie wymaga ręcznego zabijania portów.
+- [IN_PROGRESS] Nawigacja zawiera wszystkie 15 pozycji specyfikacji; boty, repozytoria GitHub, zadania, PR, review, powiadomienia i edytor używają dostępnych danych. Nieskonfigurowane PDF-y, zespoły, współpraca, CI/CD/preview, harmonogramy i koszty są jawnie oznaczone jako niedostępne.
 - [IN_PROGRESS] Widoki kont GitHub, botów, etapów, PR, zdarzeń i ustawień są połączone z API; prawdziwy przepływ OAuth wymaga poświadczeń i weryfikacji uprawnień.
 - [TODO] Potwierdzić eksport buildu Android/Windows; iOS wymaga macOS i podpisu Apple Developer.
 

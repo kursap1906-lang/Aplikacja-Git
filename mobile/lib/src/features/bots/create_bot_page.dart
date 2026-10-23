@@ -345,22 +345,27 @@ class _CreateBotPageState extends ConsumerState<CreateBotPage> {
         const SizedBox(height: 22),
         const _FieldLabel(number: '1', title: 'Jak ma nazywać się bot?'),
         const SizedBox(height: 9),
-        TextFormField(
-          controller: _name,
-          minLines: 1,
-          maxLines: 1,
-          expands: false,
-          textAlignVertical: TextAlignVertical.center,
-          decoration: const InputDecoration(
-            isDense: true,
-            constraints: BoxConstraints(minHeight: 58, maxHeight: 62),
-            contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-            hintText: 'np. Agent dokumentacji',
-            prefixIcon: Icon(Icons.smart_toy_outlined),
+        SizedBox(
+          height: 58,
+          child: TextFormField(
+            controller: _name,
+            minLines: 1,
+            maxLines: 1,
+            expands: false,
+            textAlignVertical: TextAlignVertical.center,
+            decoration: const InputDecoration(
+              isDense: true,
+              contentPadding: EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 12,
+              ),
+              hintText: 'np. Agent dokumentacji',
+              prefixIcon: Icon(Icons.smart_toy_outlined),
+            ),
+            validator: (value) => value == null || value.trim().isEmpty
+                ? 'Wpisz nazwę bota, aby przejść dalej.'
+                : null,
           ),
-          validator: (value) => value == null || value.trim().isEmpty
-              ? 'Wpisz nazwę bota, aby przejść dalej.'
-              : null,
         ),
         const SizedBox(height: 22),
         const _FieldLabel(
@@ -371,26 +376,18 @@ class _CreateBotPageState extends ConsumerState<CreateBotPage> {
         session.when(
           data: (_) => accounts.isEmpty
               ? _NoAccounts(onOpen: () => context.go('/accounts'))
-              : DropdownButtonFormField<String>(
-                  key: ValueKey('account-$_accountId'),
-                  initialValue: _accountId,
-                  isExpanded: true,
-                  decoration: const InputDecoration(
-                    hintText: 'Wybierz połączone konto',
-                    prefixIcon: Icon(Icons.account_circle_outlined),
-                  ),
-                  items: [
+              : Column(
+                  children: [
                     for (final account in accounts)
-                      DropdownMenuItem(
-                        value: account['id'].toString(),
-                        enabled: account['status'] == 'ACTIVE',
-                        child: Text(
-                          '@${account['login']} · ${_accountStatus(account['status'])}',
-                          overflow: TextOverflow.ellipsis,
-                        ),
+                      _GitHubAccountOption(
+                        account: account,
+                        selected: account['id'].toString() == _accountId,
+                        onTap: account['status'] == 'ACTIVE'
+                            ? () => _selectAccount(account['id'].toString())
+                            : null,
+                        status: _accountStatus(account['status']),
                       ),
                   ],
-                  onChanged: _selectAccount,
                 ),
           loading: () => const LinearProgressIndicator(),
           error: (error, stack) => Text(
@@ -809,6 +806,78 @@ class _TipCard extends StatelessWidget {
       ],
     ),
   );
+}
+
+class _GitHubAccountOption extends StatelessWidget {
+  const _GitHubAccountOption({
+    required this.account,
+    required this.selected,
+    required this.onTap,
+    required this.status,
+  });
+
+  final Map<String, dynamic> account;
+  final bool selected;
+  final VoidCallback? onTap;
+  final String status;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = selected ? AppColors.blue : AppColors.stroke;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Material(
+        color: selected
+            ? AppColors.blue.withValues(alpha: .08)
+            : AppColors.panel,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(9),
+          side: BorderSide(color: color),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.account_circle_outlined,
+                  color: onTap == null ? AppColors.muted : AppColors.blue,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '@${account['login'] ?? 'GitHub'}',
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        status,
+                        style: const TextStyle(
+                          color: AppColors.muted,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Icon(
+                  selected
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_off,
+                  color: selected ? AppColors.blue : AppColors.muted,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _SummaryCard extends StatelessWidget {

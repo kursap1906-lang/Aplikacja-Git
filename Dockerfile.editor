@@ -1,0 +1,8 @@
+FROM codercom/code-server:4.103.2
+
+USER root
+RUN mkdir -p /home/coder/project /home/coder/.local/share/code-server \
+    && chown -R coder:coder /home/coder/project /home/coder/.local/share/code-server
+COPY --chown=coder:coder scripts/editor-entrypoint.sh /usr/local/bin/editor-entrypoint
+USER coder
+ENTRYPOINT ["sh", "/usr/local/bin/editor-entrypoint"]

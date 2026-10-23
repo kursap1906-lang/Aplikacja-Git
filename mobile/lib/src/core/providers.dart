@@ -32,6 +32,19 @@ final pullRequestProvider = FutureProvider.family<Map<String, dynamic>, ({String
   },
 );
 
+final githubRepositoriesProvider =
+    FutureProvider.family<List<Map<String, dynamic>>, String>((ref, accountId) async {
+  final response = await ref
+      .watch(apiClientProvider)
+      .request('/github/accounts/$accountId/repositories');
+  final repositories = response['repositories'];
+  if (repositories is! List) return const [];
+  return repositories
+      .whereType<Map>()
+      .map((repository) => Map<String, dynamic>.from(repository))
+      .toList();
+});
+
 final notificationsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
   final result = await ref.watch(apiClientProvider).request('/notifications');
   final notifications = result['notifications'];

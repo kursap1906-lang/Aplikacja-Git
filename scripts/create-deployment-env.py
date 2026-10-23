@@ -50,6 +50,7 @@ def deployment_values(
             f"APP_DOMAIN={domain}",
             f"APP_ORIGIN=https://{domain}",
             f"PUBLIC_API_URL=https://{domain}",
+            *([f"EDITOR_URL=https://editor.{domain}/editor/"] if environment == "staging" else []),
             "PORT=3000",
             "HOST=0.0.0.0",
             f"APP_PROXY_ALIAS=control-center-{environment}-api",
@@ -81,6 +82,7 @@ def create_environment_files(
         ".env.production": deployment_values("production", production_domain, app_image_tag, *production_oauth),
         ".env.proxy": (
             f"STAGING_DOMAIN={staging_domain}\n"
+            f"EDITOR_DOMAIN=editor.{staging_domain}\n"
             f"PRODUCTION_DOMAIN={production_domain}\n"
             "CADDYFILE=./Caddyfile\n"
         ),

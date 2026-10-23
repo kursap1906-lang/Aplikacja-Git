@@ -1,15 +1,49 @@
-import 'package:copilot_control_center/src/core/providers.dart';
+import 'package:copilot_control_center/src/app_router.dart';
 import 'package:copilot_control_center/src/core/api.dart';
+import 'package:copilot_control_center/src/core/providers.dart';
+import 'package:copilot_control_center/src/features/auth/login_page.dart';
 import 'package:copilot_control_center/src/features/bots/bot_detail_page.dart';
 import 'package:copilot_control_center/src/features/bots/create_bot_page.dart';
 import 'package:copilot_control_center/src/features/dashboard/dashboard_page.dart';
-import 'package:copilot_control_center/src/features/auth/login_page.dart';
+import 'package:copilot_control_center/src/features/shell/app_shell.dart';
 import 'package:copilot_control_center/src/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('mobile navigation exposes every destination from the specification', (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    final router = createAppRouter(initialLocation: '/teams');
+    addTearDown(router.dispose);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          botsProvider.overrideWith((ref) async => []),
+        ],
+        child: MaterialApp.router(
+          theme: AppTheme.dark,
+          routerConfig: router,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(appNavigationDestinations, hasLength(15));
+    await tester.tap(find.byTooltip('Otwórz nawigację'));
+    await tester.pumpAndSettle();
+    for (final destination in appNavigationDestinations) {
+      expect(find.text(destination.label), findsWidgets);
+    }
+
+    await tester.tap(find.text('Projekty i PDF'));
+    await tester.pumpAndSettle();
+    expect(find.text('Przechowywanie PDF nie jest jeszcze skonfigurowane'), findsOneWidget);
+  });
+
   testWidgets(
     'login screen offers local login and account registration before GitHub linking',
     (tester) async {
@@ -74,6 +108,11 @@ void main() {
                 'user': {'displayName': 'Tester'},
                 'githubAccounts': [
                   {'id': 'gh-1', 'login': 'octocat', 'status': 'ACTIVE'},
+                  {
+                    'id': 'gh-2',
+                    'login': 'octocat-old',
+                    'status': 'REAUTH_REQUIRED',
+                  },
                 ],
               },
             ),
@@ -92,26 +131,30 @@ void main() {
       expect(find.text('Opisz zadanie i zasady'), findsNothing);
 
       final nameField = find.byType(TextFormField).first;
-      expect(tester.getSize(nameField).height, lessThanOrEqualTo(70));
+      expect(tester.getSize(nameField).height, 58);
       await tester.enterText(nameField, 'Agent dokumentacji');
       expect(
         tester.widget<TextFormField>(nameField).controller!.text,
         'Agent dokumentacji',
       );
-      expect(find.text('Połącz konto GitHub, aby wybrać repozytorium.'), findsNothing);
+      expect(
+        find.text('Połącz konto GitHub, aby wybrać repozytorium.'),
+        findsNothing,
+      );
+      expect(find.text('@octocat'), findsOneWidget);
+      expect(find.text('@octocat-old'), findsOneWidget);
+      expect(find.text('aktywne'), findsOneWidget);
+      expect(find.text('wymaga autoryzacji'), findsOneWidget);
+      await tester.ensureVisible(find.text('@octocat'));
+      await tester.tap(find.text('@octocat'));
+      await tester.pumpAndSettle();
+      expect(find.byIcon(Icons.radio_button_checked), findsOneWidget);
+      await tester.pumpAndSettle();
+
       await tester.ensureVisible(
         find.byType(DropdownButtonFormField<String>).first,
       );
       await tester.tap(find.byType(DropdownButtonFormField<String>).first);
-      await tester.pumpAndSettle();
-      expect(find.text('@octocat · aktywne'), findsOneWidget);
-      await tester.tap(find.text('@octocat · aktywne').last);
-      await tester.pumpAndSettle();
-
-      await tester.ensureVisible(
-        find.byType(DropdownButtonFormField<String>).last,
-      );
-      await tester.tap(find.byType(DropdownButtonFormField<String>).last);
       await tester.pumpAndSettle();
       await tester.tap(find.text('octocat/docs · prywatne').last);
       await tester.pumpAndSettle();
@@ -174,7 +217,63 @@ void main() {
   });
 
   testWidgets(
-    'a waiting stage exposes explicit approval and separate change requests',
+    'an unconfirmed Copilot submission shows Polish recovery instead of status polling',
+    (tester) async {
+      final api = _FakeUnconfirmedTaskApi();
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            botProvider.overrideWith(
+              (ref, id) async => {
+                'name': 'Agent dokumentacji',
+                'repository': 'example/docs',
+                'systemPrompt': 'Działaj tylko w tym repozytorium.',
+                'stages': [
+                  {
+                    'id': 'clstage00000000000000000000',
+                    'number': 1,
+                    'title': 'Logowanie',
+                    'description': 'Popraw panel logowania.',
+                    'acceptanceCriteria': ['Testy przechodzą'],
+                    'status': 'RUNNING',
+                    'submissionUnconfirmed': true,
+                    'pullRequests': [],
+                  },
+                ],
+              },
+            ),
+            apiClientProvider.overrideWith((ref) => api),
+          ],
+          child: MaterialApp(
+            theme: AppTheme.dark,
+            home: const BotDetailPage(botId: 'bot-test'),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.textContaining('Nie udało się potwierdzić'),
+        findsOneWidget,
+      );
+      expect(find.text('Sprawdź status Copilota'), findsNothing);
+      await tester.ensureVisible(
+        find.text('Sprawdziłem GitHub — ponów zadanie'),
+      );
+      await tester.tap(find.text('Sprawdziłem GitHub — ponów zadanie'));
+      await tester.pumpAndSettle();
+      expect(find.text('Sprawdź zadania GitHub'), findsOneWidget);
+      expect(find.text('Nie ma zadania — ponów'), findsOneWidget);
+
+      await tester.tap(find.text('Nie ma zadania — ponów'));
+      await tester.pumpAndSettle();
+
+      expect(api.confirmedNoTaskExists, isTrue);
+    },
+  );
+
+  testWidgets(
+    'a waiting stage blocks approval until review evidence is available',
     (tester) async {
       await tester.pumpWidget(
         ProviderScope(
@@ -207,10 +306,14 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Zatwierdź etap'), findsOneWidget);
+      final approval = tester.widget<FilledButton>(
+        find.widgetWithText(FilledButton, 'Zatwierdź etap'),
+      );
+      expect(approval.onPressed, isNull);
       expect(find.text('Poproś o poprawki'), findsOneWidget);
       expect(
         find.text(
-          'Akceptacja etapu nie scala pull requesta i nie uruchamia agenta.',
+          'Akceptacja jest zablokowana, dopóki serwer nie potwierdzi CI, aktualnego preview i testów. Prośba o poprawki zapisuje uwagi; ponowne zadanie uruchomisz po ich sprawdzeniu.',
         ),
         findsOneWidget,
       );
@@ -242,6 +345,29 @@ class _FakeBotSetupApi extends ApiClient {
             'canPush': false,
           },
         ],
+      };
+    }
+
+    throw StateError('Unexpected API request: $path');
+  }
+}
+
+class _FakeUnconfirmedTaskApi extends ApiClient {
+  bool? confirmedNoTaskExists;
+
+  @override
+  Future<Map<String, dynamic>> request(
+    String path, {
+    String method = 'GET',
+    Object? data,
+    bool withCredentials = false,
+  }) async {
+    if (path == '/stages/clstage00000000000000000000/start' &&
+        method == 'POST') {
+      confirmedNoTaskExists =
+          (data as Map<String, dynamic>)['confirmedNoTaskExists'] as bool?;
+      return {
+        'task': {'id': 'task-confirmed'},
       };
     }
     throw StateError('Unexpected API request: $path');

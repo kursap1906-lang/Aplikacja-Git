@@ -1,6 +1,6 @@
 # Stan projektu
 
-Ostatnia aktualizacja: 2026-10-19
+Ostatnia aktualizacja: 2026-10-23
 
 ## Wynik
 
@@ -15,8 +15,11 @@ Ostatnia aktualizacja: 2026-10-19
 ## Ukończone i weryfikacja
 
 - Analiza początkowego repozytorium, narzędzi, skonfigurowanego aliasu SSH i publicznego zakresu REST GitHuba.
-- Backend TypeScript/Fastify: `npm exec -- tsc --noEmit`, bez błędów; `npm test`, 32/32 testy zaliczone, w tym preflight Codespaces, rejestracja, Origin/CSRF i odrzucenie obcego hosta.
-- Flutter: `flutter test`, 4/4 testy zaliczone; `flutter analyze`, bez uwag.
+- Backend TypeScript/Fastify: `npm exec -- tsc --noEmit`, bez błędów; `npm test`, 37/37 testów zaliczonych, w tym preflight Codespaces, rejestracja, Origin/CSRF i odrzucenie obcego hosta.
+- Flutter: 7/7 testów zaliczonych; `flutter analyze` bez uwag; release build Web zbudowany.
+- Nawigacja ma wszystkie 15 pozycji z PDF. Widoki GitHub, botów, zadań, PR, review i edytora korzystają z istniejącego API; brakujące backendy zespołów, PDF, współpracy, CI/CD/preview, harmonogramów i rozliczeń są jawnie oznaczone.
+- Zatwierdzenie etapu jest blokowane po stronie UI i API, dopóki serwer nie weryfikuje CI, deploymentu preview przypiętego do SHA, testów manualnych i uprawnień recenzenta.
+- Obecna strona staging i API zwracają HTTP 200. Konfiguracja Caddy po naprawie domyślnej domeny edytora przechodzi `caddy validate`, a kontener wrócił do stanu healthy. Nowa wersja aplikacji wymaga jeszcze opublikowania i wdrożenia na obecnym hostingu.
 - Schemat Prisma poprawnie zwalidowany, klient wygenerowany, 3 lokalne migracje zastosowane w bazie z nazwanym wolumenem i 16 tabel potwierdzonych przez PostgreSQL.
 - Lokalne health-checki API zwracają HTTP 200, baza jest gotowa, preflight CORS dla portu UI zwraca 204.
 - Flutter Web i bootstrap asset zwracają HTTP 200; aplikacja została otwarta w domyślnej przeglądarce. Sprawdzenie po restarcie: UI `4173` HTTP 200, API `3000/` HTTP 302 do UI, `/health/ready` HTTP 200 z połączeniem PostgreSQL.

@@ -11,6 +11,7 @@ services:
     networks:
       - staging_edge
       - production_edge
+      - editor_edge
     volumes:
       - ${CADDYFILE:-./Caddyfile}:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -43,4 +44,7 @@ networks:
     external: true
   production_edge:
     name: ccc-production-edge
+    external: true
+  editor_edge:
+    name: ccc-editor-edge
     external: true

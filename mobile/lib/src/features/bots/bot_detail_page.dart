@@ -59,6 +59,7 @@ class BotDetailPage extends ConsumerWidget {
               itemCount: stages.length,
               itemBuilder: (context, index) => _StageCard(
                 botId: botId,
+                repository: bot['repository']?.toString() ?? '',
                 stage: stages[index],
                 onRefresh: () => ref.invalidate(botProvider(botId)),
               ),
@@ -75,8 +76,14 @@ class BotDetailPage extends ConsumerWidget {
 }
 
 class _StageCard extends ConsumerStatefulWidget {
-  const _StageCard({required this.botId, required this.stage, required this.onRefresh});
+  const _StageCard({
+    required this.botId,
+    required this.repository,
+    required this.stage,
+    required this.onRefresh,
+  });
   final String botId;
+  final String repository;
   final Map<String, dynamic> stage;
   final VoidCallback onRefresh;
 
@@ -89,7 +96,11 @@ class _StageCardState extends ConsumerState<_StageCard> {
   String? _error;
   String? _taskUrl;
 
-  Future<void> _perform(String action, {String? reason}) async {
+  Future<void> _perform(
+    String action, {
+    String? reason,
+    bool confirmedNoTaskExists = false,
+  }) async {
     setState(() {
       _busy = true;
       _error = null;
@@ -98,7 +109,10 @@ class _StageCardState extends ConsumerState<_StageCard> {
       final result = await ref.read(apiClientProvider).request(
         '/stages/${widget.stage['id']}/$action',
         method: 'POST',
-        data: {'reason': ?reason},
+        data: {
+          'reason': ?reason,
+          if (confirmedNoTaskExists) 'confirmedNoTaskExists': true,
+        },
       );
       if (mounted) {
         if (action == 'start') {
@@ -111,7 +125,17 @@ class _StageCardState extends ConsumerState<_StageCard> {
         ref.invalidate(notificationsProvider);
       }
     } on Object catch (error) {
-      if (mounted) setState(() => _error = error.toString());
+      if (mounted) {
+        final message =
+            error is ApiException &&
+                error.code == 'COPILOT_TASK_SUBMISSION_UNCONFIRMED'
+            ? null
+            : error.toString();
+        setState(() => _error = message);
+        widget.onRefresh();
+        ref.invalidate(botsProvider);
+        ref.invalidate(notificationsProvider);
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -129,7 +153,8 @@ class _StageCardState extends ConsumerState<_StageCard> {
       if (mounted) {
         final task = result['task'];
         setState(() {
-          _error = 'Status Copilota: ${task is Map ? task['state'] ?? 'nieznany' : 'nieznany'}';
+          _error =
+              'Status Copilota: ${_taskStateLabel(task is Map ? task['state'] : null)}';
           final url = task is Map ? task['url'] : null;
           if (url is String) _taskUrl = url;
         });
@@ -143,6 +168,68 @@ class _StageCardState extends ConsumerState<_StageCard> {
       if (mounted) setState(() => _busy = false);
     }
   }
+
+  Future<void> _retryUnconfirmedTask() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Sprawdź zadania GitHub'),
+        content: const Text(
+          'Aplikacja nie otrzymała potwierdzenia uruchomienia. Otwórz repozytorium na GitHubie i sprawdź sekcję zadań Copilot. Ponowienie może utworzyć drugie zadanie, jeśli poprzednie jednak wystartowało.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: _openRepository,
+            child: const Text('Otwórz repozytorium'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Anuluj'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Nie ma zadania — ponów'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      await _perform('start', confirmedNoTaskExists: true);
+    }
+  }
+
+  Future<void> _openRepository() async {
+    if (!RegExp(r'^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$')
+        .hasMatch(widget.repository)) {
+      setState(() => _error = 'Nieprawidłowy adres repozytorium.');
+      return;
+    }
+    final uri = Uri.https('github.com', '/${widget.repository}');
+    if (!await launchUrl(uri, mode: LaunchMode.externalApplication) &&
+        mounted) {
+      setState(() => _error = 'Nie udało się otworzyć repozytorium GitHub.');
+    }
+  }
+
+  Future<void> _openEditor() async {
+    try {
+      await openCodeEditor(ref.read(apiClientProvider));
+    } on Object catch (error) {
+      if (mounted) setState(() => _error = error.toString());
+    }
+  }
+
+  String _taskStateLabel(Object? state) => switch (state) {
+    'queued' => 'oczekuje w kolejce',
+    'in_progress' => 'w trakcie',
+    'completed' => 'zakończone',
+    'failed' => 'niepowodzenie',
+    'idle' => 'bezczynne',
+    'waiting_for_user' => 'oczekuje na Twoje działanie',
+    'timed_out' => 'przekroczono limit czasu',
+    'cancelled' => 'anulowane',
+    _ => 'nieznany',
+  };
 
   Future<void> _openCopilotTask() async {
     final url = _taskUrl;
@@ -183,6 +270,7 @@ class _StageCardState extends ConsumerState<_StageCard> {
     };
     final criteria = stage['acceptanceCriteria'] is List ? stage['acceptanceCriteria'] as List : const [];
     final pullRequests = stage['pullRequests'] is List ? stage['pullRequests'] as List : const [];
+    final submissionUnconfirmed = stage['submissionUnconfirmed'] == true;
 
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
@@ -244,10 +332,31 @@ class _StageCardState extends ConsumerState<_StageCard> {
           if (status == 'WAITING_APPROVAL') ...[
             const Divider(height: 28),
             Wrap(spacing: 8, runSpacing: 8, children: [
-              FilledButton.icon(
-                onPressed: _busy ? null : () => _perform('approve'),
-                icon: const Icon(Icons.check_rounded),
-                label: const Text('Zatwierdź etap'),
+              Tooltip(
+                message: 'Wymagane są zielone CI, aktualne preview i zapisane testy manualne.',
+                child: FilledButton.icon(
+                  onPressed: null,
+                  icon: Icon(Icons.check_rounded),
+                  label: Text('Zatwierdź etap'),
+                ),
+              ),
+              Tooltip(
+                message: 'Preview CI/CD nie jest skonfigurowane dla tego etapu.',
+                child: OutlinedButton.icon(
+                  onPressed: null,
+                  icon: Icon(Icons.play_circle_outline_rounded),
+                  label: Text('Testuj aplikację'),
+                ),
+              ),
+              OutlinedButton.icon(
+                onPressed: _busy ? null : _openEditor,
+                icon: const Icon(Icons.code_rounded),
+                label: const Text('Otwórz kod w VS Code'),
+              ),
+              OutlinedButton.icon(
+                onPressed: () => context.go('/review?stage=${stage['id']}'),
+                icon: const Icon(Icons.fact_check_outlined),
+                label: const Text('Przejdź do review'),
               ),
               OutlinedButton.icon(
                 onPressed: _busy ? null : _requestChanges,
@@ -261,29 +370,45 @@ class _StageCardState extends ConsumerState<_StageCard> {
               ),
             ]),
             const SizedBox(height: 9),
-            const Text('Akceptacja etapu nie scala pull requesta i nie uruchamia agenta.',
+            const Text(
+                'Akceptacja jest zablokowana, dopóki serwer nie potwierdzi CI, aktualnego preview i testów. Prośba o poprawki zapisuje uwagi; ponowne zadanie uruchomisz po ich sprawdzeniu.',
                 style: TextStyle(color: AppColors.muted, fontSize: 11)),
           ],
           if (status == 'RUNNING') ...[
             const SizedBox(height: 12),
-            Wrap(spacing: 8, children: [
-              if (_taskUrl != null)
-                OutlinedButton.icon(
-                  onPressed: _busy ? null : _openCopilotTask,
-                  icon: const Icon(Icons.open_in_new_rounded),
-                  label: const Text('Otwórz zadanie GitHub'),
-                ),
-              OutlinedButton.icon(
-                onPressed: _busy ? null : _refreshCopilotTask,
-                icon: const Icon(Icons.sync_rounded),
-                label: const Text('Sprawdź status Copilota'),
+            if (submissionUnconfirmed) ...[
+              const Text(
+                'Nie udało się potwierdzić, czy GitHub uruchomił to zadanie. Sprawdź zadania Copilot w repozytorium przed ponowieniem.',
+                style: TextStyle(color: AppColors.amber, fontSize: 12),
               ),
-            ]),
-            const Padding(
-              padding: EdgeInsets.only(top: 8),
-              child: Text('Wznowienie, wstrzymanie i anulowanie zadania nie są obsługiwane przez GitHub Agent Tasks API.',
-                  style: TextStyle(color: AppColors.muted, fontSize: 11)),
-            ),
+              const SizedBox(height: 10),
+              FilledButton.icon(
+                onPressed: _busy ? null : _retryUnconfirmedTask,
+                icon: const Icon(Icons.replay_rounded),
+                label: const Text('Sprawdziłem GitHub — ponów zadanie'),
+              ),
+            ] else ...[
+              Wrap(spacing: 8, children: [
+                if (_taskUrl != null)
+                  OutlinedButton.icon(
+                    onPressed: _busy ? null : _openCopilotTask,
+                    icon: const Icon(Icons.open_in_new_rounded),
+                    label: const Text('Otwórz zadanie GitHub'),
+                  ),
+                OutlinedButton.icon(
+                  onPressed: _busy ? null : _refreshCopilotTask,
+                  icon: const Icon(Icons.sync_rounded),
+                  label: const Text('Sprawdź status Copilota'),
+                ),
+              ]),
+              const Padding(
+                padding: EdgeInsets.only(top: 8),
+                child: Text(
+                  'Wznowienie, wstrzymanie i anulowanie zadania nie są obsługiwane przez API GitHub Agent Tasks.',
+                  style: TextStyle(color: AppColors.muted, fontSize: 11),
+                ),
+              ),
+            ],
           ],
           if (status == 'PAUSED') ...[
             const Padding(
