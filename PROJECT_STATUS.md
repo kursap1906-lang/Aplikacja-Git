@@ -20,7 +20,7 @@ Ostatnia aktualizacja: 2026-10-23
 - Nawigacja ma wszystkie 15 pozycji z PDF. Widoki GitHub, botów, zadań, PR, review i edytora korzystają z istniejącego API; brakujące backendy zespołów, PDF, współpracy, CI/CD/preview, harmonogramów i rozliczeń są jawnie oznaczone.
 - Zatwierdzenie etapu jest blokowane po stronie UI i API, dopóki serwer nie weryfikuje CI, deploymentu preview przypiętego do SHA, testów manualnych i uprawnień recenzenta.
 - Commit `1857a47` wdrożono na istniejącym hostingu staging. Strona i `/health/ready` zwracają HTTP 200; kontenery API, PostgreSQL i Caddy są zdrowe. Edytor code-server działa na prywatnej sieci; jego upstream zwraca HTTP 200, a publiczny URL bez sesji HTTP 401. Caddy poprawnie uzyskał certyfikat TLS dla domeny edytora.
-- Logowanie akceptuje istniejące hasła krótsze niż minimalne 12 znaków wymagane przy rejestracji; aktualizacja naprawiająca błąd walidacji została przygotowana po zgłoszeniu z stagingu.
+- Logowanie akceptuje istniejące hasła krótsze niż minimalne 12 znaków wymagane przy rejestracji; poprawka wdrożona na stagingu jako `c112795`.
 - Backup stagingu `backups/staging/postgres-20261023T075448.114430245Z.dump` zweryfikowano i odtworzono do osobnej bazy `ccc_restore_20261023075822` (3 migracje); istniejąca baza nie była nadpisywana.
 - Push na GitHub jest jeszcze zablokowany przez brak uwierzytelnienia Git w środowisku. Produkcja nie była zmieniana.
 - Schemat Prisma poprawnie zwalidowany, klient wygenerowany, 3 lokalne migracje zastosowane w bazie z nazwanym wolumenem i 16 tabel potwierdzonych przez PostgreSQL.
