@@ -141,8 +141,26 @@ export function teamPlanSchema(botIds: string[]) {
       title: z.string().trim().min(1).max(200),
       description: z.string().trim().min(1).max(5000),
       priority: z.enum(['LOW', 'NORMAL', 'HIGH', 'URGENT']),
+      key: z.string().regex(/^[a-z][a-z0-9-]{0,49}$/),
+      dependsOn: z.array(z.string()).max(100),
+      steps: z.array(z.string().trim().min(10).max(700)).min(2).max(12),
+      acceptanceCriteria: z.array(z.string().trim().min(10).max(700)).min(2).max(10),
+      verification: z.array(z.string().trim().min(10).max(700)).min(1).max(8),
     }).strict()).max(100),
-  }).strict();
+  }).strict().superRefine((plan, context) => {
+    const seen = new Set<string>();
+    for (const [index, task] of plan.tasks.entries()) {
+      if (task.description.length + [...task.steps, ...task.acceptanceCriteria, ...task.verification]
+        .reduce((sum, item) => sum + item.length, 0) > 4500) {
+        context.addIssue({ code: 'custom', path: ['tasks', index, 'description'], message: 'Split large tasks: the complete execution prompt must fit the editable task limit.' });
+      }
+      if (seen.has(task.key) || new Set(task.dependsOn).size !== task.dependsOn.length ||
+          task.dependsOn.some(key => !seen.has(key))) {
+        context.addIssue({ code: 'custom', path: ['tasks', index, 'dependsOn'], message: 'Task keys must be unique; dependencies must reference earlier tasks only.' });
+      }
+      seen.add(task.key);
+    }
+  });
 }
 
 export async function prepareTeamAnalysis(prisma: PrismaClient, source: TeamAnalysisSource, encryptionKey: string) {
@@ -197,6 +215,12 @@ export async function prepareTeamAnalysis(prisma: PrismaClient, source: TeamAnal
         'Dodawaj wyłącznie brakujące zadania; jeżeli wszystko już zaplanowano, zwróć pustą listę zadań.',
         'Nie wymyślaj wykonanych prac, wyników testów ani zawartości repozytorium, której nie dostarczono.',
         'Opis zadania powinien zawierać zakres i mierzalne kryteria odbioru. Priorytet musi wynikać z materiałów.',
+        'Rozbij każdą funkcję dokumentu na małe, pojedynczo testowalne przyrosty: kontrakt/dane, API, widok web, widok mobile, integracja i testy. Nie twórz jednego zadania „cała aplikacja” dla bota.',
+        'Każdy task ma klucz key i dependsOn odwołujące się tylko do kluczy WCZEŚNIEJSZYCH zadań w tym planie. Uwzględnij zależności między rolami; QA zależy od implementacji.',
+        'description jest samodzielnym szczegółowym promptem: cel, źródłowe wymagania dokumentu, kontekst repozytorium i kontrakty, zakres i granice, przekazanie wyników innym botom. Nie zakładaj, że agent widział inne zadania.',
+        'steps to konkretne kroki wykonawcze; acceptanceCriteria to mierzalne warunki odbioru; verification to testy i dowody dla SHA. Wymagaj naprawy niezaliczonych testów i PR do zatwierdzenia, nie samego opisu rozwiązania.',
+        'Łączna długość description, steps, acceptanceCriteria i verification jednego zadania nie może przekraczać 4500 znaków. Większy zakres podziel na kolejne zadania, nigdy nie obcinaj wymagań.',
+        'Pokryj wszystkie wymagania materiałów oraz integrację web/mobile/API, błędy, migracje i wdrożenie. summary musi zawierać mapę pokrycia i jawne nierozstrzygnięte braki. Nie deklaruj kompletności, jeśli limit 100 zadań lub brak danych nie pozwala jej osiągnąć.',
       ].join('\n'),
       input,
       schema: {
@@ -206,12 +230,17 @@ export async function prepareTeamAnalysis(prisma: PrismaClient, source: TeamAnal
           tasks: {
             type: 'array', maxItems: 100,
             items: {
-              type: 'object', additionalProperties: false, required: ['botId', 'title', 'description', 'priority'],
+              type: 'object', additionalProperties: false, required: ['botId', 'title', 'description', 'priority', 'key', 'dependsOn', 'steps', 'acceptanceCriteria', 'verification'],
               properties: {
                 botId: { type: 'string', enum: botIds },
                 title: { type: 'string', minLength: 1, maxLength: 200 },
                 description: { type: 'string', minLength: 1, maxLength: 5000 },
                 priority: { type: 'string', enum: ['LOW', 'NORMAL', 'HIGH', 'URGENT'] },
+                key: { type: 'string', pattern: '^[a-z][a-z0-9-]{0,49}$' },
+                dependsOn: { type: 'array', maxItems: 100, items: { type: 'string' } },
+                steps: { type: 'array', minItems: 2, maxItems: 12, items: { type: 'string', minLength: 10, maxLength: 700 } },
+                acceptanceCriteria: { type: 'array', minItems: 2, maxItems: 10, items: { type: 'string', minLength: 10, maxLength: 700 } },
+                verification: { type: 'array', minItems: 1, maxItems: 8, items: { type: 'string', minLength: 10, maxLength: 700 } },
               },
             },
           },
@@ -245,8 +274,28 @@ export async function applyTeamPlan(
     planned.add(key);
   }
   const taskIds: string[] = [];
+  const keyedIds = new Map<string, string>();
+  const previousByBot = new Map<string, string>();
   for (const task of plan.tasks) {
-    const created = await tx.projectTask.create({ data: { ...task, userId, projectId, teamId: source.team.id } });
+    const description = [
+      task.description,
+      'KROKI WYKONANIA:', ...task.steps.map((step, index) => `${index + 1}. ${step}`),
+      'KRYTERIA ODBIORU:', ...task.acceptanceCriteria.map(item => `- ${item}`),
+      'WERYFIKACJA I DOWODY:', ...task.verification.map(item => `- ${item}`),
+      'Dostarcz działający przyrost, wyniki testów dla SHA i PR do ręcznej akceptacji. Nie scalaj i nie twórz dodatkowych gałęzi.',
+    ].join('\n');
+    const created = await tx.projectTask.create({ data: {
+      botId: task.botId, title: task.title, priority: task.priority, description,
+      userId, projectId, teamId: source.team.id,
+    } });
+    const dependencies = new Set(task.dependsOn.map(key => keyedIds.get(key)!));
+    const previous = previousByBot.get(task.botId);
+    if (previous) dependencies.add(previous);
+    for (const dependsOnTaskId of dependencies) {
+      await tx.taskDependency.create({ data: { taskId: created.id, dependsOnTaskId } });
+    }
+    keyedIds.set(task.key, created.id);
+    previousByBot.set(task.botId, created.id);
     taskIds.push(created.id);
   }
   return { summary: plan.summary, taskIds, addedTaskCount: taskIds.length };

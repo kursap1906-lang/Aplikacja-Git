@@ -636,6 +636,25 @@ void main() {
     },
   );
 
+  testWidgets('bot activity lists the team without starting remote jobs', (
+    tester,
+  ) async {
+    final api = _TeamApi();
+    final team = api.seedTeam('Frontend');
+    api.addTask(team, {
+      'title': 'First increment',
+      'botId': (team['bots'] as List).first['botId'],
+    });
+    await _open(tester, api, team: 'Frontend');
+    await _tap(tester, 'Podgląd botów');
+    expect(find.text('Boty zespołu — podgląd pracy'), findsOneWidget);
+    expect(find.textContaining('Gałąź: ccc/bot-'), findsNWidgets(2));
+    expect(find.text('Start zadania'), findsOneWidget);
+    expect(api.writes, isEmpty);
+    await tester.pump(const Duration(seconds: 16));
+    expect(api.writes, isEmpty);
+  });
+
   testWidgets(
     'calendar persists ISO weekdays and IANA timezone for the selected instance only',
     (tester) async {

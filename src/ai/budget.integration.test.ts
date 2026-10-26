@@ -251,7 +251,18 @@ test('authenticated async AI tasks persist results and charge rejected output wi
               botId: mode === 'invalid-assignee' ? 'another-team-bot' : botId,
               title: mode === 'duplicate' ? 'Manual completed task' : `Generated task ${generationCalls}`,
               description: 'Implement the synthetic feature and verify acceptance tests.', priority: 'HIGH',
-            }],
+              key: 'fixture-task', dependsOn: [],
+              steps: ['Inspect synthetic repository.', 'Implement the tested feature.'],
+              acceptanceCriteria: ['Synthetic feature works.', 'Synthetic tests pass.'],
+              verification: ['Run the synthetic test suite.'],
+            }, ...[2, 3].map(index => ({
+              botId, title: `Generated task ${generationCalls} step ${index}`,
+              description: 'Deliver the next synthetic increment.', priority: 'NORMAL',
+              key: `fixture-step-${index}`, dependsOn: index === 3 ? ['fixture-task'] : [],
+              steps: ['Read the prior implementation.', 'Implement the next increment.'],
+              acceptanceCriteria: ['Increment is integrated.', 'Regression tests pass.'],
+              verification: ['Run the synthetic test suite.'],
+            }))],
           }),
         }],
       }],
@@ -345,7 +356,13 @@ test('authenticated async AI tasks persist results and charge rejected output wi
   assert.equal(completed.estimatedCostMicros, 1583);
   assert.equal(generationCalls, 1);
   const tasks = await prisma.projectTask.findMany({ where: { teamId: team.id } });
-  assert.equal(tasks.length, 2);
+  assert.equal(tasks.length, 4);
+  const generated = tasks.filter(task => task.id !== manual.id);
+  assert.ok(generated.every(task => task.description.includes('KROKI WYKONANIA:') && task.description.includes('WERYFIKACJA I DOWODY:') && task.description.length <= 5000));
+  const last = generated.find(task => task.title.endsWith('step 3'))!;
+  const edges = await prisma.taskDependency.findMany({ where: { taskId: { in: generated.map(task => task.id) } } });
+  assert.equal(edges.length, 3);
+  assert.equal(edges.filter(edge => edge.taskId === last.id).length, 2);
   assert.equal(tasks.find((task) => task.id === manual.id)?.status, 'COMPLETED');
   assert.equal(tasks.find((task) => task.id !== manual.id)?.botId, botId);
   assert.equal((await prisma.bot.findUniqueOrThrow({ where: { id: botId } })).status, 'IDLE');
@@ -363,7 +380,7 @@ test('authenticated async AI tasks persist results and charge rejected output wi
     assert.equal(job.status, 'FAILED');
     assert.equal(job.errorCode, expectedCode);
     assert.equal(job.estimatedCostMicros, 1583);
-    assert.equal(await prisma.projectTask.count({ where: { teamId: team.id } }), 2);
+    assert.equal(await prisma.projectTask.count({ where: { teamId: team.id } }), 4);
   }
   mode = 'changed-before-generation';
   const before = generationCalls;

@@ -52,6 +52,99 @@ test('disabled SDK executor rejects starts without queuing or mutating tasks', a
   assert.equal(capabilities.json().workspace.sdkExecution, false);
 });
 
+test('workspace GitHub PRs use the owned account, pagination, SHA-pinned checks and explicit writes', async context => {
+  const config = testConfig();
+  const accountId = 'cltestaccount0000000000001';
+  const sha = 'a'.repeat(40);
+  const pull = {
+    number: 7, title: 'Fixture PR', body: 'Description', html_url: 'https://github.com/fixture/repository/pull/7',
+    state: 'open', draft: true, merged_at: null, user: { login: 'fixture' },
+    head: { ref: 'feature/test', sha }, base: { ref: 'main' }, updated_at: '2026-10-26T20:00:00Z',
+  };
+  const calls: Array<{ path: string; method: string }> = [];
+  const audits: string[] = [];
+  const app = createApp({
+    config, prisma: makePrisma('csrf', {
+      gitHubAccount: { findFirst: async ({ where }: { where: { id: string; userId: string; status: string } }) => {
+        assert.equal(where.userId, 'user-id');
+        assert.equal(where.status, 'ACTIVE');
+        return where.id === accountId ? {
+          tokenExpiresAt: null, encryptedAccessToken: encryptSecret('fixture-pr-token', config.APP_ENCRYPTION_KEY!),
+        } : null;
+      } },
+      auditEvent: { create: async ({ data }: { data: { action: string } }) => { audits.push(data.action); } },
+    }),
+    fetcher: async (input, options) => {
+      const url = new URL(String(input));
+      const method = options?.method ?? 'GET';
+      assert.equal(new Headers(options?.headers).get('authorization'), 'Bearer fixture-pr-token');
+      calls.push({ path: url.pathname, method });
+      if (url.pathname.endsWith('/files')) return Response.json([{ filename: 'app.ts', status: 'modified', additions: 2, deletions: 1, patch: '+tested' }]);
+      if (url.pathname.endsWith('/comments')) return Response.json(method === 'POST'
+        ? { id: 1, body: 'Review', user: null, created_at: '2026-10-26T20:00:00Z', html_url: pull.html_url } : []);
+      if (url.pathname.endsWith('/check-runs')) {
+        assert.ok(url.pathname.includes(sha));
+        return Response.json({ check_runs: [{ name: 'tests', status: 'completed', conclusion: 'success', html_url: pull.html_url }] });
+      }
+      if (url.pathname.endsWith('/status')) return Response.json({ state: 'success', statuses: [] });
+      if (url.pathname.endsWith('/pulls') && method === 'GET') return Response.json([pull], {
+        headers: { link: '<https://api.github.com/repos/fixture/repository/pulls?page=2>; rel="next"' },
+      });
+      if (method === 'POST') assert.equal(JSON.parse(String(options?.body)).draft, true);
+      return Response.json(pull);
+    },
+  });
+  context.after(() => app.close());
+  const query = `accountId=${accountId}&repository=fixture/repository`;
+  const base = '/api/workspace/github/pulls';
+  const headers = { authorization: 'Bearer fixture-session', 'x-csrf-token': 'csrf' };
+  assert.equal((await app.inject({ url: `${base}?${query}` })).statusCode, 401);
+  const list = await app.inject({ url: `${base}?${query}`, headers });
+  assert.equal(list.statusCode, 200, list.body);
+  assert.equal(list.json().nextPage, 2);
+  assert.equal(list.json().pulls[0].state, 'draft');
+  assert.ok(!list.body.includes('fixture-pr-token'));
+  const detail = await app.inject({ url: `${base}/7?${query}`, headers });
+  assert.equal(detail.statusCode, 200, detail.body);
+  assert.equal(detail.json().ciSha, sha);
+  assert.equal(detail.json().files[0].patch, '+tested');
+  assert.equal(detail.json().truncated, false);
+  const before = calls.length;
+  const foreign = await app.inject({ url: `${base}?accountId=clotheraccount00000000001&repository=fixture/repository`, headers });
+  assert.equal(foreign.statusCode, 404);
+  assert.equal(calls.length, before);
+  assert.equal((await app.inject({
+    method: 'POST', url: `${base}/7/comments?${query}`, headers: { authorization: headers.authorization }, payload: { body: 'Review' },
+  })).statusCode, 403);
+  const comment = await app.inject({
+    method: 'POST', url: `${base}/7/comments?${query}`, headers, payload: { body: 'Review' },
+  });
+  assert.equal(comment.statusCode, 201, comment.body);
+  const created = await app.inject({
+    method: 'POST', url: `${base}?${query}`, headers, payload: { title: 'Fixture PR', head: 'feature/test', base: 'main' },
+  });
+  assert.equal(created.statusCode, 201, created.body);
+  assert.deepEqual(audits, ['GITHUB_PR_COMMENT_CREATED', 'GITHUB_PR_CREATED']);
+});
+
+test('workspace settings reports unavailable adapters honestly without secrets', async context => {
+  const app = createApp({
+    config: testConfig(), prisma: makePrisma('csrf', {
+      gitHubAccount: { findMany: async () => [{ id: 'account', login: 'fixture', status: 'ACTIVE' }] },
+    }),
+  });
+  context.after(() => app.close());
+  assert.equal((await app.inject({ url: '/api/workspace/settings' })).statusCode, 401);
+  const response = await app.inject({ url: '/api/workspace/settings', headers: { authorization: 'Bearer fixture-session' } });
+  assert.equal(response.statusCode, 200, response.body);
+  const report = response.json();
+  assert.equal(report.integrations.find((entry: { id: string }) => entry.id === 'agents').status, 'CONFIGURED');
+  assert.equal(report.integrations.find((entry: { id: string }) => entry.id === 'blender').supported, false);
+  assert.equal(report.security.agentExecution, 'GITHUB_HOSTED');
+  assert.ok(!response.body.includes('encryptedAccessToken'));
+  assert.ok(!response.body.includes('DATABASE_URL='));
+});
+
 test('repository listing supports explicit pages and indicates continuation without exposing credentials', async (context) => {
   const config = testConfig();
   const accountId = 'cltestaccount0000000000001';
@@ -1403,7 +1496,7 @@ test('retries an unconfirmed task only after explicit confirmation that GitHub h
   assert.ok(updatedJobs.some((data) => data.externalTaskId === 'task_retry'));
 });
 
-test('starts an owned stage with its encrypted GitHub account and persisted task notification', async (context) => {
+test('starts a team-role stage remotely with its encrypted GitHub account and persisted task notification', async (context) => {
   const config = testConfig();
   let currentStatus = 'PENDING';
   let recordedTaskId: string | undefined;
@@ -1421,6 +1514,7 @@ test('starts an owned stage with its encrypted GitHub account and persisted task
     transitions: [],
     bot: {
       id: 'clbot0000000000000000000000',
+      definitionId: 'cldefinition000000000000001',
       systemPrompt: 'Work only in the selected repository.',
       repository: 'owner/repository',
       defaultBranch: 'main',
@@ -1433,11 +1527,12 @@ test('starts an owned stage with its encrypted GitHub account and persisted task
     },
   };
   const transaction = {
+    $queryRaw: async () => [],
     workSchedule: { findUnique: async () => null },
     costBudget: { findUnique: async () => null },
     costEntry: { aggregate: async () => ({ _sum: { amountMinor: 0 } }) },
     stage: {
-      findFirst: async () => ({ ...stage, status: currentStatus }),
+      findFirst: async (query: { where: { id?: unknown } }) => typeof query.where.id === 'object' ? null : ({ ...stage, status: currentStatus }),
       findMany: async () => [{ number: 1, title: 'Update the application', status: currentStatus }],
       updateMany: async ({ data }: { data: { status: string } }) => {
         currentStatus = data.status;
@@ -1471,6 +1566,7 @@ test('starts an owned stage with its encrypted GitHub account and persisted task
   };
   const app = createApp({
     prisma: makePrisma('csrf-secret', {
+      stage: { update: async () => stage },
       projectScan: {
         findFirst: async () => ({
           branch: 'main',
@@ -1491,6 +1587,7 @@ test('starts an owned stage with its encrypted GitHub account and persisted task
     }),
     config,
     copilotProvider: provider,
+    fetcher: async (url) => Response.json(String(url).includes('/pulls?') ? [] : { object: { sha: 'a'.repeat(40) } }),
   });
   context.after(() => app.close());
 
@@ -1510,6 +1607,7 @@ test('starts an owned stage with its encrypted GitHub account and persisted task
     stage: { id: stage.id, status: 'RUNNING' },
   });
   assert.equal(currentStatus, 'RUNNING');
+  assert.equal(launchedRequest?.headBranch, `ccc/bot-${stage.bot.id}`);
   assert.equal(recordedTaskId, 'task_123');
   assert.equal(recordedNotification?.type, 'COPILOT_TASK_STARTED');
   assert.equal(launchedRequest?.accessToken, 'github-user-token');
@@ -1609,6 +1707,8 @@ test('syncs a completed cloud-agent task through testing to approval and records
       state: 'completed',
       url: 'https://github.com/owner/repository',
       updatedAt: null,
+      sessions: [], artifacts: [], logsAvailable: false, automaticRepliesAvailable: false,
+      pullRequests: [], repository: 'owner/repository', accountId: 'claccount000000000000000000',
     },
     stage: { id: stageId, status: 'WAITING_APPROVAL' },
   });

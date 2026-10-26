@@ -33,7 +33,11 @@ test('PDF, Office and image materials retain their exact bytes with explicit MIM
 
 test('task plans require actual team bot IDs, valid priorities, bounded content and no extra fields', () => {
   const schema = teamPlanSchema(['team-bot']);
-  const task = { botId: 'team-bot', title: 'Implement form', description: 'Include validation tests.', priority: 'HIGH' };
+  const task = {
+    botId: 'team-bot', title: 'Implement form', description: 'Include validation tests.', priority: 'HIGH',
+    key: 'form', dependsOn: [], steps: ['Inspect existing forms.', 'Implement input validation.'],
+    acceptanceCriteria: ['Invalid input is rejected.', 'Valid input is persisted.'], verification: ['Run form validation tests.'],
+  };
   assert.ok(schema.safeParse({ summary: 'Plan', tasks: [task] }).success);
   assert.ok(schema.safeParse({ summary: 'Already planned', tasks: [] }).success);
   for (const invalid of [
@@ -41,4 +45,8 @@ test('task plans require actual team bot IDs, valid priorities, bounded content 
     { ...task, title: 'x'.repeat(201) }, { ...task, description: '' }, { ...task, command: 'run code' },
   ]) assert.equal(schema.safeParse({ summary: 'Plan', tasks: [invalid] }).success, false);
   assert.equal(schema.safeParse({ summary: 'Plan', tasks: Array(101).fill(task) }).success, false);
+  assert.equal(schema.safeParse({ summary: 'Plan', tasks: [{ ...task, dependsOn: ['form'] }] }).success, false);
+  assert.equal(schema.safeParse({ summary: 'Plan', tasks: [{ ...task, description: 'x'.repeat(4500) }] }).success, false);
+  assert.equal(schema.safeParse({ summary: 'Plan', tasks: [task, task] }).success, false);
+  assert.equal(schema.safeParse({ summary: 'Plan', tasks: [task, { ...task, key: 'next', dependsOn: ['form'] }] }).success, true);
 });

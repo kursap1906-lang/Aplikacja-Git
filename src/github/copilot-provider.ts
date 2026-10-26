@@ -27,6 +27,20 @@ const taskSchema = z.object({
   name: z.string().optional(),
   created_at: z.iso.datetime().optional(),
   updated_at: z.iso.datetime().optional(),
+  sessions: z.array(z.object({
+    id: z.string(), state: taskStateSchema, prompt: z.string().optional(),
+    head_ref: z.string().optional(), base_ref: z.string().optional(), model: z.string().optional(),
+    created_at: z.string(), updated_at: z.string().optional(),
+    usage: z.object({ type: z.enum(['ai_credits', 'premium_requests']), amount: z.number() }).optional(),
+    error: z.object({ message: z.string().optional() }).optional(),
+  })).optional(),
+  artifacts: z.array(z.object({
+    provider: z.literal('github'), type: z.enum(['pull', 'branch']),
+    data: z.object({
+      id: z.number().int().positive().optional(),
+      head_ref: z.string().optional(), base_ref: z.string().optional(),
+    }),
+  })).optional(),
 });
 
 export type CopilotTaskState = z.infer<typeof taskStateSchema>;
@@ -36,6 +50,7 @@ export type CopilotTaskRequest = {
   repository: string;
   prompt: string;
   baseBranch: string;
+  headBranch?: string;
 };
 
 export type CopilotTask = z.infer<typeof taskSchema>;
@@ -84,6 +99,7 @@ export class GitHubCopilotProvider implements CopilotProvider {
         body: JSON.stringify({
           prompt: request.prompt,
           base_ref: request.baseBranch,
+          ...(request.headBranch ? { head_ref: request.headBranch } : {}),
           create_pull_request: true,
         }),
         signal: AbortSignal.timeout(20000),

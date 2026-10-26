@@ -183,7 +183,18 @@ void main() {
     (tester) async {
       final api = _CostsApi();
       await _mount(tester, api);
-      expect(find.textContaining('natywnego trybu Auto'), findsOneWidget);
+      expect(
+        find.textContaining('Zadania wykonuje GitHub Agents'),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('quota-ring-account-ai_credits')),
+        findsOneWidget,
+      );
+      final bar = tester.widget<LinearProgressIndicator>(
+        find.byKey(const ValueKey('quota-bar-account-ai_credits')),
+      );
+      expect(bar.value, closeTo(.8765, .00001));
       expect(find.textContaining('wykorzystano: 123.5'), findsOneWidget);
       expect(
         find.textContaining('Twoje rozliczone analizy: 0.001117 USD'),

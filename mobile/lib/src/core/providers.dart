@@ -81,19 +81,17 @@ final teamsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
       .toList();
 });
 
-final botProvider = FutureProvider.family<Map<String, dynamic>, String>((
-  ref,
-  id,
-) async {
-  final result = await ref.watch(apiClientProvider).request('/bots/$id');
-  return Map<String, dynamic>.from(result['bot'] as Map);
-});
+final botProvider = FutureProvider.autoDispose
+    .family<Map<String, dynamic>, String>((ref, id) async {
+      final result = await ref.watch(apiClientProvider).request('/bots/$id');
+      return Map<String, dynamic>.from(result['bot'] as Map);
+    });
 
-final pullRequestProvider =
-    FutureProvider.family<
-      Map<String, dynamic>,
-      ({String botId, String pullRequestId})
-    >((ref, ids) async {
+final pullRequestProvider = FutureProvider.autoDispose
+    .family<Map<String, dynamic>, ({String botId, String pullRequestId})>((
+      ref,
+      ids,
+    ) async {
       final result = await ref
           .watch(apiClientProvider)
           .request('/bots/${ids.botId}/pull-requests/${ids.pullRequestId}');

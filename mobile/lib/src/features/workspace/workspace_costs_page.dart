@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../core/api.dart';
 import 'workspace_data.dart';
 import 'workspace_shell.dart';
+import 'workspace_dashboard.dart';
 
 class WorkspaceCostsPage extends StatefulWidget {
   const WorkspaceCostsPage({required this.api, super.key});
@@ -210,7 +211,7 @@ class _WorkspaceCostsPageState extends State<WorkspaceCostsPage> {
             children: [
               const Text(
                 'GitHub Copilot korzysta z subskrypcji konta przypisanego do bota. '
-                'Wszystkie boty używają natywnego trybu Auto. OpenAI do analiz ma osobne rozliczenie.',
+                'Zadania wykonuje GitHub Agents; odczyt pakietów SDK jest osobną funkcją. OpenAI do analiz ma osobne rozliczenie.',
               ),
               if (_loading) const LinearProgressIndicator(),
               if (_error != null)
@@ -223,6 +224,42 @@ class _WorkspaceCostsPageState extends State<WorkspaceCostsPage> {
           ),
         ),
         if (data != null) ...[
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final width = constraints.maxWidth >= 650
+                  ? (constraints.maxWidth - 12) / 2
+                  : constraints.maxWidth;
+              return Wrap(
+                spacing: 12,
+                runSpacing: 8,
+                children: [
+                  SizedBox(
+                    width: width,
+                    child: WorkspaceMetricCard(
+                      title: 'Twoje konta GitHub',
+                      value: '${data.accounts.length}',
+                      subtitle:
+                          '${data.accounts.where((account) => account.quotaKnown).length} z odczytanym raportem pakietów',
+                      icon: Icons.account_tree_outlined,
+                      color: Colors.indigo,
+                    ),
+                  ),
+                  SizedBox(
+                    width: width,
+                    child: WorkspaceMetricCard(
+                      title: 'OpenAI · rozliczone analizy',
+                      value:
+                          '${(data.aiSpentMicros / 1000000).toStringAsFixed(4)} USD',
+                      subtitle:
+                          '${(data.aiReservedMicros / 1000000).toStringAsFixed(2)} USD zajętych rezerwacji · ${data.aiMonth}',
+                      icon: Icons.auto_awesome_outlined,
+                      color: Colors.teal,
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
           WorkspacePanel(
             title: 'Limit dodatkowych wydatków GitHub Copilot',
             child: Column(
@@ -256,7 +293,7 @@ class _WorkspaceCostsPageState extends State<WorkspaceCostsPage> {
                 ),
                 if (!data.sdkExecutionAvailable)
                   const Text(
-                    'Wykonawca zadań SDK jest jeszcze podłączany. Zapis limitu nie uruchamia botów.',
+                    'Lokalny wykonawca SDK jest wyłączony. Boty uruchamiasz ręcznie na GitHub. Ten zapis jest polityką panelu i nie zmienia limitów rozliczeń u dostawcy.',
                   ),
                 Wrap(
                   spacing: 12,
@@ -344,7 +381,32 @@ class _WorkspaceCostsPageState extends State<WorkspaceCostsPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(account.login, style: Theme.of(context).textTheme.titleMedium),
+            Row(
+              children: [
+                CircleAvatar(
+                  backgroundColor: Colors.indigo.withValues(alpha: .1),
+                  child: Text(
+                    account.login.substring(0, 1).toUpperCase(),
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    '@${account.login}',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                ),
+                Chip(
+                  label: Text(
+                    account.active ? 'Aktywne konto' : 'Połącz ponownie',
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
             if (!account.active)
               const Text('Konto wymaga ponownego połączenia.'),
             if (account.fetchedAt != null)
@@ -356,7 +418,18 @@ class _WorkspaceCostsPageState extends State<WorkspaceCostsPage> {
             if (account.errorMessage != null)
               Text('Odczyt nie powiódł się: ${account.errorMessage}'),
             if (!account.quotaKnown)
-              const Text('Nie pobrano jeszcze danych pakietu.'),
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 12),
+                child: Row(
+                  children: [
+                    Icon(Icons.help_outline, color: Colors.blueGrey),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text('Nie pobrano jeszcze danych pakietu.'),
+                    ),
+                  ],
+                ),
+              ),
             if (account.quotaKnown && account.quotas.isEmpty)
               const Text('GitHub nie udostępnił danych o limitach pakietu.'),
             if (account.autoAvailable == false)
@@ -364,6 +437,89 @@ class _WorkspaceCostsPageState extends State<WorkspaceCostsPage> {
             for (final quota in account.quotas) ...[
               const Divider(),
               Text('Pakiet: ${quota.name}'),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  SizedBox(
+                    width: 76,
+                    height: 76,
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        SizedBox.expand(
+                          child: CircularProgressIndicator(
+                            key: ValueKey(
+                              'quota-ring-${account.id}-${quota.name}',
+                            ),
+                            value: quota.unlimited
+                                ? 1
+                                : (quota.remainingPercentage / 100)
+                                      .clamp(0, 1)
+                                      .toDouble(),
+                            strokeWidth: 7,
+                            backgroundColor: Colors.indigo.withValues(
+                              alpha: .1,
+                            ),
+                            color:
+                                quota.remainingPercentage <= 10 &&
+                                    !quota.unlimited
+                                ? Colors.orange
+                                : Colors.indigo,
+                          ),
+                        ),
+                        Text(
+                          quota.unlimited
+                              ? '∞'
+                              : '${quota.remainingPercentage.toStringAsFixed(0)}%',
+                          style: const TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 20),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          quota.unlimited
+                              ? 'Bez limitu'
+                              : 'Pozostało w pakiecie',
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                        const SizedBox(height: 8),
+                        LinearProgressIndicator(
+                          key: ValueKey(
+                            'quota-bar-${account.id}-${quota.name}',
+                          ),
+                          value: quota.unlimited
+                              ? 1
+                              : (quota.remainingPercentage / 100)
+                                    .clamp(0, 1)
+                                    .toDouble(),
+                          minHeight: 10,
+                          borderRadius: BorderRadius.circular(8),
+                          color:
+                              quota.remainingPercentage <= 10 &&
+                                  !quota.unlimited
+                              ? Colors.orange
+                              : Colors.indigo,
+                          backgroundColor: Colors.indigo.withValues(alpha: .1),
+                          semanticsLabel:
+                              '${account.login} · ${quota.name} · pozostało',
+                          semanticsValue: quota.unlimited
+                              ? 'bez limitu'
+                              : '${quota.remainingPercentage}%',
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
               Text(
                 quota.unlimited
                     ? 'Uprawnienie dla tego pakietu: bez limitu'

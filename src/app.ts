@@ -27,6 +27,8 @@ import { ProjectScannerError, scanGitHubProject } from './projects/project-scann
 import { ApiError, isUniqueConstraintError, parseRequest } from './http/errors.ts';
 import { registerWorkspaceRoutes } from './workspace/routes.ts';
 import { registerTaskRunRoutes } from './workspace/runs.ts';
+import { registerWorkspaceGitHubRoutes } from './workspace/github.ts';
+import { registerWorkspaceSettings } from './workspace/settings.ts';
 import { verifyRepositoryAccess } from './github/repository-access.ts';
 import { registerAnalysisRoutes } from './ai/routes.ts';
 import { attachAnalysisWorker } from './ai/worker.ts';
@@ -456,6 +458,8 @@ export function createApp(options: {
   registerTaskRunRoutes(app, {
     prisma, encryptionKey, fetcher, authenticate: authenticateWorkspace, executionEnabled: false,
   });
+  registerWorkspaceGitHubRoutes(app, { prisma, encryptionKey, fetcher, authenticate: authenticateWorkspace });
+  registerWorkspaceSettings(app, { prisma, config, encryptionKey, fetcher, authenticate: authenticateWorkspace });
   registerWorkspaceRoutes(app, {
     prisma,
     encryptionKey,
@@ -505,6 +509,9 @@ export function createApp(options: {
       botMessageDrafts: true,
       perBotSchedules: true,
       sdkExecution: false,
+      githubHostedExecution: true,
+      pullRequestManagement: true,
+      constructionTeamTemplate: true,
       openaiAnalysis: analysisWorker?.healthy() === true,
     },
     pdfDocuments: {
@@ -1189,7 +1196,6 @@ export function createApp(options: {
           select: { id: true, projectId: true },
         });
         if (!task) throw new ApiError(404, 'TASK_NOT_FOUND', 'Nie znaleziono zadania.');
-
         const dependencies = dependencyIds.length
           ? await transaction.projectTask.findMany({
               where: {
@@ -1260,12 +1266,17 @@ export function createApp(options: {
           where: { id: taskId, userId: session.userId },
           select: {
             id: true,
+            githubStageId: true,
+            githubStage: { select: { status: true } },
             prerequisites: {
               select: { dependsOn: { select: { id: true, title: true, status: true } } },
             },
           },
         });
         if (!task) throw new ApiError(404, 'TASK_NOT_FOUND', 'Nie znaleziono zadania.');
+        if (task.githubStageId) {
+          throw new ApiError(409, 'AGENT_REVIEW_REQUIRED', 'Status powiązanego zadania zmienia wykonanie i zatwierdzenie etapu, nie ręczne pominięcie review.');
+        }
         const unmet = task.prerequisites.filter((item) => item.dependsOn.status !== 'COMPLETED');
         if (status !== 'TODO' && status !== 'BLOCKED' && unmet.length) {
           throw new ApiError(
@@ -2723,7 +2734,7 @@ export function createApp(options: {
     return prisma.$transaction(async (transaction) => {
       const stage = await transaction.stage.findFirst({
         where: { id: stageId, bot: { userId: session.userId } },
-        include: { bot: true },
+        include: { bot: true, projectTask: true },
       });
 
       if (!stage) {
@@ -2767,6 +2778,11 @@ export function createApp(options: {
           details: { fromStatus: transition.previousStatus, reason: reason ?? null, approvedCommitSha: approvedSha },
         },
       });
+      if (stage.projectTask && action === 'APPROVED') {
+        await transaction.projectTask.update({
+          where: { id: stage.projectTask.id }, data: { status: 'COMPLETED' },
+        });
+      }
 
       return { id: stage.id, status: transition.status, occurredAt: transition.occurredAt, transitionId: transitionEvent.id };
     }, { isolationLevel: 'Serializable' });
@@ -2821,7 +2837,10 @@ export function createApp(options: {
       const stage = await transaction.stage.findFirst({
         where: { id: stageId, bot: { userId: session.userId } },
         include: {
-          bot: { include: { githubAccount: true } },
+          bot: { include: { githubAccount: true, workSchedule: true } },
+          projectTask: {
+            include: { prerequisites: { include: { dependsOn: { select: { status: true, title: true } } } } },
+          },
           transitions: {
             where: { toStatus: 'CHANGES_REQUESTED' },
             orderBy: { createdAt: 'desc' },
@@ -2834,11 +2853,28 @@ export function createApp(options: {
         throw new ApiError(404, 'STAGE_NOT_FOUND', 'Stage was not found.');
       }
 
-      if (stage.bot.definitionId) {
-        throw new ApiError(409, 'SDK_RUNTIME_REQUIRED', 'Ten bot wymaga sesji Copilot SDK. Nie zostanie uruchomiony przez Agent Tasks API.');
-      }
-
       await assertPlanningAllowsStart(transaction, session.userId, new Date());
+      if (stage.bot.definitionId || stage.projectTask) {
+        await transaction.$queryRaw`SELECT "id" FROM "Bot" WHERE "id" = ${stage.botId} FOR UPDATE`;
+        const active = await transaction.stage.findFirst({
+          where: { botId: stage.botId, id: { not: stage.id }, status: { in: ['RUNNING', 'TESTING', 'WAITING_APPROVAL', 'PAUSED'] } },
+          select: { id: true },
+        });
+        if (active) throw new ApiError(409, 'BOT_HAS_ACTIVE_STAGE', 'Bot ma aktywny etap lub wynik oczekujący na decyzję. Najpierw zakończ poprzedni etap.');
+      }
+      const botSchedule = stage.bot.workSchedule;
+      if (botSchedule?.enabled && !isWithinWorkWindows(new Date(), botSchedule.timezone,
+        botSchedule.days.map(day => ({ day: day % 7, start: botSchedule.startTime, end: botSchedule.endTime })))) {
+        throw new ApiError(409, 'OUTSIDE_WORK_WINDOW', 'Start jest dozwolony tylko w zapisanych godzinach pracy tego bota.');
+      }
+      const projectTask = stage.projectTask;
+      if (projectTask?.status === 'COMPLETED') {
+        throw new ApiError(409, 'TASK_ALREADY_COMPLETED', 'To zadanie jest już ukończone.');
+      }
+      const unmet = projectTask?.prerequisites.filter(item => item.dependsOn.status !== 'COMPLETED') ?? [];
+      if (unmet.length) {
+        throw new ApiError(409, 'TASK_PREREQUISITES_UNMET', `Najpierw ukończ: ${unmet.map(item => item.dependsOn.title).join(', ')}.`);
+      }
 
       const unconfirmedJob = await transaction.backgroundJob.findFirst({
         where: {
@@ -3017,18 +3053,64 @@ export function createApp(options: {
         : []),
       'Acceptance criteria:',
       ...claim.stage.acceptanceCriteria.map((criterion) => `- ${criterion}`),
+      'Execution protocol: inspect the repository and existing instructions first. Implement only this small task, run the relevant checks, fix failures within scope, and report concrete changed files, commands and results in the PR.',
+      'Use only the supplied working branch. Do not create additional branches or parallel PRs. Keep all follow-up work for this bot on that branch. Never merge, deploy, approve your own work or claim unrun tests passed.',
+      'Before a new increment, synchronize the working branch with the base branch without force-push, resetting commits or deleting history. A base-to-working-branch integration is allowed; merging the PR into the base branch requires owner approval.',
+      'Resolve ordinary implementation choices using the project specification and repository conventions. Ask the owner only for missing credentials, destructive operations, ambiguous product requirements or necessary paid/external actions. Stop for owner review when the acceptance criteria are met.',
     ].join('\n\n');
 
     let task;
+    let submissionAttempted = false;
     try {
+      let headBranch = claim.stage.branchName ?? undefined;
+      if ((bot.definitionId || claim.stage.projectTask) && !headBranch) {
+        headBranch = `ccc/bot-${bot.id}`;
+        const token = decryptSecret(account.encryptedAccessToken, encryptionKey());
+        const baseUrl = `https://api.github.com/repos/${bot.repository.split('/').map(encodeURIComponent).join('/')}`;
+        const headers = { accept: 'application/vnd.github+json', authorization: `Bearer ${token}`, 'x-github-api-version': '2026-03-10' };
+        const owner = bot.repository.split('/')[0]!;
+        const openPulls = await fetcher(`${baseUrl}/pulls?state=open&head=${encodeURIComponent(`${owner}:${headBranch}`)}&per_page=1`, {
+          headers, redirect: 'error', signal: AbortSignal.timeout(15000),
+        });
+        if (!openPulls.ok) throw new GitHubCopilotApiError(openPulls.status, 'GITHUB_BRANCH_PR_CHECK_FAILED');
+        const open = z.array(z.object({ number: z.number().int().positive() })).safeParse(await openPulls.json());
+        if (!open.success) throw new GitHubCopilotApiError(502, 'GITHUB_BRANCH_RESPONSE_INVALID');
+        if (open.data.length) {
+          throw new ApiError(409, 'BOT_BRANCH_PR_OPEN', 'Poprzedni PR tej gałęzi jest nadal otwarty. Scal lub zamknij go po review przed kolejnym zadaniem. Nie utworzono dodatkowej gałęzi.');
+        }
+        const branch = await fetcher(`${baseUrl}/git/ref/heads/${headBranch}`, {
+          headers, redirect: 'error', signal: AbortSignal.timeout(15000),
+        });
+        if (branch.status === 404) {
+          const base = await fetcher(`${baseUrl}/git/ref/heads/${bot.defaultBranch}`, {
+            headers, redirect: 'error', signal: AbortSignal.timeout(15000),
+          });
+          if (!base.ok) throw new GitHubCopilotApiError(base.status, 'GITHUB_BRANCH_BASE_UNAVAILABLE');
+          const ref = z.object({ object: z.object({ sha: z.string().regex(/^[a-f0-9]{40}$/) }) }).safeParse(await base.json());
+          if (!ref.success) throw new GitHubCopilotApiError(502, 'GITHUB_BRANCH_RESPONSE_INVALID');
+          const created = await fetcher(`${baseUrl}/git/refs`, {
+            method: 'POST', headers: { ...headers, 'content-type': 'application/json' },
+            body: JSON.stringify({ ref: `refs/heads/${headBranch}`, sha: ref.data.object.sha }),
+            redirect: 'error', signal: AbortSignal.timeout(15000),
+          });
+          if (!created.ok) throw new GitHubCopilotApiError(created.status, 'GITHUB_BRANCH_CREATE_FAILED');
+        } else if (!branch.ok) {
+          throw new GitHubCopilotApiError(branch.status, 'GITHUB_BRANCH_UNAVAILABLE');
+        } else if (!z.object({ object: z.object({ sha: z.string().regex(/^[a-f0-9]{40}$/) }) }).safeParse(await branch.json()).success) {
+          throw new GitHubCopilotApiError(502, 'GITHUB_BRANCH_RESPONSE_INVALID');
+        }
+        await prisma.stage.update({ where: { id: claim.stage.id }, data: { branchName: headBranch } });
+      }
+      submissionAttempted = true;
       task = await copilotProvider.launchTask({
         accessToken: decryptSecret(account.encryptedAccessToken, encryptionKey()),
         repository: bot.repository,
         prompt,
-        baseBranch: claim.stage.branchName ?? bot.defaultBranch,
+        baseBranch: bot.defaultBranch,
+        ...(headBranch ? { headBranch } : {}),
       });
     } catch (error) {
-      const definiteRejection = error instanceof GitHubCopilotApiError
+      const definiteRejection = !submissionAttempted || error instanceof GitHubCopilotApiError
         && [400, 401, 403, 404, 422, 429].includes(error.statusCode);
 
       if (error instanceof GitHubCopilotApiError && error.statusCode === 401) {
@@ -3050,6 +3132,7 @@ export function createApp(options: {
           where: { id: claim.stage.id, status: 'RUNNING' },
           data: { status: claim.previousStatus },
         });
+        if (error instanceof ApiError) throw error;
 
         const rejectedStatus = error instanceof GitHubCopilotApiError ? error.statusCode : 502;
         if (rejectedStatus === 401) {
@@ -3080,6 +3163,12 @@ export function createApp(options: {
         where: { id: claim.jobId },
         data: { externalTaskId: task.id, lockedAt: null },
       });
+      if (claim.stage.projectTask) {
+        await transaction.projectTask.updateMany({
+          where: { githubStageId: claim.stage.id, userId: session.userId },
+          data: { status: 'IN_PROGRESS' },
+        });
+      }
       await transaction.notification.create({
         data: {
           userId: session.userId,
@@ -3118,6 +3207,7 @@ export function createApp(options: {
       where: { id: stageId, bot: { userId: session.userId } },
       include: {
         bot: { include: { githubAccount: true } },
+        transitions: { orderBy: { createdAt: 'desc' }, take: 1 },
         jobs: {
           where: {
             OR: [
@@ -3189,14 +3279,28 @@ export function createApp(options: {
       waiting_for_user: 'PAUSED',
     };
     const terminalStatus = terminalStatuses[task.state];
-
+    const latestTransition = stage.transitions?.[0]?.details;
     let currentStageStatus = stage.status;
-    if (terminalStatus && stage.status === 'RUNNING') {
+    if (stage.status === 'PAUSED' && !['idle', 'waiting_for_user'].includes(task.state) &&
+        latestTransition && typeof latestTransition === 'object' &&
+        'actor' in latestTransition && latestTransition.actor === 'copilot_agent') {
+      await prisma.$transaction(async tx => {
+        const resumed = await tx.stage.updateMany({ where: { id: stage.id, status: 'PAUSED', updatedAt: stage.updatedAt }, data: { status: 'RUNNING' } });
+        if (resumed.count !== 1) throw new ApiError(409, 'STAGE_STATE_CHANGED', 'Etap zmienił się podczas synchronizacji. Odśwież jego podgląd.');
+        await tx.stageTransitionEvent.create({ data: {
+          stageId: stage.id, fromStatus: 'PAUSED', toStatus: 'RUNNING',
+          details: { actor: 'copilot_agent', externalTaskId: task.id },
+        } });
+      });
+      currentStageStatus = 'RUNNING';
+    }
+
+    if (terminalStatus && currentStageStatus === 'RUNNING') {
       const nextStatuses = terminalStatus === 'WAITING_APPROVAL'
         ? ['TESTING', 'WAITING_APPROVAL'] as const
         : [terminalStatus] as const;
       await prisma.$transaction(async (transaction) => {
-        let current = stage.status;
+        let current = currentStageStatus;
         for (const nextStatus of nextStatuses) {
           const updated = await transaction.stage.updateMany({
             where: { id: stage.id, status: current },
@@ -3206,7 +3310,7 @@ export function createApp(options: {
             },
           });
           if (updated.count !== 1) {
-            break;
+            throw new ApiError(409, 'STAGE_STATE_CHANGED', 'Etap zmienił się podczas synchronizacji. Odśwież jego podgląd.');
           }
           await transaction.stageTransitionEvent.create({
             data: {
@@ -3250,8 +3354,47 @@ export function createApp(options: {
       });
     }
 
+    const linkedPulls: Array<{ id: string; number: number; title: string; url: string }> = [];
+    if (stage.bot.definitionId && stage.branchName) {
+      const headers = {
+        accept: 'application/vnd.github+json',
+        authorization: `Bearer ${decryptSecret(account.encryptedAccessToken, encryptionKey())}`,
+        'x-github-api-version': '2026-03-10',
+      };
+      const owner = stage.bot.repository.split('/')[0]!;
+      const pulls = await fetcher(`https://api.github.com/repos/${stage.bot.repository}/pulls?state=open&head=${encodeURIComponent(`${owner}:${stage.branchName}`)}&per_page=10`, {
+        headers, redirect: 'error', signal: AbortSignal.timeout(15000),
+      });
+      if (!pulls.ok) throw new ApiError(502, 'GITHUB_PR_DISCOVERY_FAILED', 'Status agenta zapisano, ale nie udało się odczytać jego PR. Odśwież podgląd.');
+      const parsed = z.array(z.object({
+        number: z.number().int().positive(), title: z.string(), html_url: z.url(),
+        head: z.object({ ref: z.string() }), base: z.object({ ref: z.string() }),
+      })).safeParse(await pulls.json());
+      if (!parsed.success) throw new ApiError(502, 'GITHUB_RESPONSE_INVALID', 'Nieprawidłowa odpowiedź listy PR agenta.');
+      for (const pull of parsed.data) {
+        if (pull.head.ref !== stage.branchName) continue;
+        const linked = await prisma.pullRequest.upsert({
+          where: { repository_number: { repository: stage.bot.repository, number: pull.number } },
+          create: {
+            stageId: stage.id, repository: stage.bot.repository, number: pull.number, title: pull.title,
+            url: pull.html_url, headBranch: pull.head.ref, baseBranch: pull.base.ref,
+          },
+          update: {},
+        });
+        if (linked.stageId === stage.id) linkedPulls.push({ id: linked.id, number: pull.number, title: pull.title, url: pull.html_url });
+      }
+    }
     return {
-      task: { id: task.id, state: task.state, url: task.html_url ?? task.url ?? null, updatedAt: task.updated_at ?? null },
+      task: {
+        id: task.id, state: task.state,
+        url: task.html_url ?? `https://github.com/${stage.bot.repository}/agents`,
+        updatedAt: task.updated_at ?? null,
+        sessions: task.sessions ?? [], artifacts: task.artifacts ?? [],
+        logsAvailable: false, automaticRepliesAvailable: false,
+        pullRequests: linkedPulls,
+        repository: stage.bot.repository, accountId: account.id, branch: stage.branchName,
+        prompt: stage.description, acceptanceCriteria: stage.acceptanceCriteria,
+      },
       stage: { id: stage.id, status: currentStageStatus },
     };
   });

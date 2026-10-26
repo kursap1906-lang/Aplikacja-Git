@@ -11,6 +11,7 @@ class WorkspaceRepositoryPicker extends StatefulWidget {
     required this.accounts,
     required this.onChanged,
     this.enabled = true,
+    this.requirePush = true,
     super.key,
   });
 
@@ -18,6 +19,7 @@ class WorkspaceRepositoryPicker extends StatefulWidget {
   final List<WorkspaceAccount> accounts;
   final ValueChanged<WorkspaceRepositorySelection?> onChanged;
   final bool enabled;
+  final bool requirePush;
 
   @override
   State<WorkspaceRepositoryPicker> createState() =>
@@ -121,7 +123,7 @@ class _WorkspaceRepositoryPickerState extends State<WorkspaceRepositoryPicker> {
             for (final repository in _repositories)
               DropdownMenuItem(
                 value: repository.id,
-                enabled: repository.canPush,
+                enabled: !widget.requirePush || repository.canPush,
                 child: Text(
                   '${repository.fullName}${repository.canPush ? '' : ' · tylko odczyt'}',
                   overflow: TextOverflow.ellipsis,

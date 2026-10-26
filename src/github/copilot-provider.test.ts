@@ -53,6 +53,20 @@ test('reads the task state from the repository-scoped task endpoint', async () =
       state: 'completed',
       html_url: 'https://github.com/octo-org/control-center',
     });
+
+    test('continues work on the supplied working branch without requesting a new branch', async () => {
+      const provider = new GitHubCopilotProvider(async (_url, init) => {
+        const body = JSON.parse(String(init?.body));
+        assert.equal(body.head_ref, 'ccc/bot-fixture');
+        assert.equal(body.base_ref, 'main');
+        return Response.json({
+          id: 'task_123', state: 'waiting_for_user',
+          sessions: [{ id: 'session-1', state: 'waiting_for_user', created_at: '2026-10-26T23:00:00Z', head_ref: 'ccc/bot-fixture', prompt: 'Detailed task' }],
+        }, { status: 201 });
+      });
+      const result = await provider.launchTask({ accessToken: 'fixture', repository: 'owner/repo', prompt: 'Detailed task', baseBranch: 'main', headBranch: 'ccc/bot-fixture' });
+      assert.equal(result.sessions?.[0]?.head_ref, 'ccc/bot-fixture');
+    });
   });
 
   const task = await provider.getTask({

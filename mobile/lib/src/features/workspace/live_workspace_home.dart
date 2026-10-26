@@ -12,6 +12,9 @@ import 'workspace_projects_page.dart';
 import 'workspace_shell.dart';
 import 'workspace_teams_page.dart';
 import 'workspace_costs_page.dart';
+import 'workspace_dashboard.dart';
+import 'workspace_github_page.dart';
+import 'workspace_settings_page.dart';
 
 class LiveWorkspaceRoot extends StatelessWidget {
   const LiveWorkspaceRoot({super.key});
@@ -60,9 +63,6 @@ class _LiveWorkspaceHomeState extends ConsumerState<LiveWorkspaceHome> {
     }
   }
 
-  Widget _pending(String title, String message) =>
-      WorkspacePanel(title: title, child: Text(message));
-
   Widget _withAccounts(Widget Function(List<WorkspaceAccount>) builder) {
     try {
       return builder(parseWorkspaceAccounts(widget.session));
@@ -85,47 +85,18 @@ class _LiveWorkspaceHomeState extends ConsumerState<LiveWorkspaceHome> {
     ),
   );
 
-  Widget _dashboard(WorkspaceData data) => Column(
-    crossAxisAlignment: CrossAxisAlignment.stretch,
-    children: [
-      WorkspacePanel(
-        title: 'Twój workspace',
-        trailing: IconButton(
-          tooltip: 'Odśwież dane',
-          onPressed: _reload,
-          icon: const Icon(Icons.refresh),
-        ),
-        child: Wrap(
-          spacing: 12,
-          children: [
-            Chip(label: Text('Projekty: ${data.projects.length}')),
-            Chip(label: Text('Zespoły: ${data.teams.length}')),
-            Chip(label: Text('Definicje botów: ${data.roles.length}')),
-          ],
-        ),
-      ),
-      WorkspacePanel(
-        title: 'Zespoły AI',
-        child: data.teams.isEmpty
-            ? const Text('Nie masz jeszcze zespołów zapisanych na serwerze.')
-            : Column(
-                children: [
-                  for (final team in data.teams)
-                    ListTile(
-                      leading: const Icon(Icons.groups),
-                      title: Text(team.name),
-                      subtitle: Text(
-                        '${team.members.length} botów · ${team.tasks.length} zadań',
-                      ),
-                      onTap: () => setState(() {
-                        _teamId = team.id;
-                        _page = 1;
-                      }),
-                    ),
-                ],
-              ),
-      ),
-    ],
+  Widget _dashboard(WorkspaceData data) => WorkspaceDashboard(
+    data: data,
+    onReload: _reload,
+    onCosts: () => setState(() => _page = 5),
+    onCreateTeam: () => setState(() {
+      _teamId = null;
+      _page = 1;
+    }),
+    onTeam: (id) => setState(() {
+      _teamId = id;
+      _page = 1;
+    }),
   );
 
   Widget _calendar(WorkspaceData data) {
@@ -199,20 +170,23 @@ class _LiveWorkspaceHomeState extends ConsumerState<LiveWorkspaceHome> {
     ),
     3 => _projects(data),
     6 => _calendar(data),
-    7 => WorkspacePanel(
-      title: 'Połączenia kont',
-      child: OutlinedButton.icon(
-        onPressed: () => context.go('/connect'),
-        icon: const Icon(Icons.link),
-        label: const Text('Zarządzaj kontami GitHub'),
+    7 => _withAccounts(
+      (accounts) => WorkspaceSettingsPage(
+        api: ref.read(apiClientProvider),
+        accounts: accounts,
+        onCalendar: () => setState(() => _page = 6),
+      ),
+    ),
+    4 => _withAccounts(
+      (accounts) => WorkspaceGitHubPage(
+        api: ref.read(apiClientProvider),
+        accounts: accounts,
+        projects: data.projects,
+        teams: data.teams,
       ),
     ),
     5 => WorkspaceCostsPage(api: ref.read(apiClientProvider)),
-    _ => _pending(
-      workspaceNavigation[_page].$1,
-      'Ten ekran jest w trakcie podłączania. Operacje nie są jeszcze dostępne '
-      'w panelu API; nie zastępujemy ich danymi demonstracyjnymi.',
-    ),
+    _ => throw StateError('Unknown workspace page: $_page'),
   };
 
   @override
@@ -222,9 +196,9 @@ class _LiveWorkspaceHomeState extends ConsumerState<LiveWorkspaceHome> {
       page: _page,
       title: workspaceNavigation[_page].$1,
       banner:
-          'Panel API — podłączanie etapami. Dane pochodzą z Twojego konta; '
-          'niedokończone funkcje są jawnie zablokowane. Brak automatycznego startu, pusha i PR.',
-      status: 'API · w budowie',
+          'Boty uruchamiasz ręcznie w repozytorium GitHub (Agents). '
+          'Panel nie wykonuje zadań lokalnie. Zmiany wymagają przeglądu; brak automatycznego merge.',
+      status: 'API · GitHub Agents',
       onNavigate: (page) => setState(() => _page = page),
       onLogout: _logout,
       loggingOut: _loggingOut,

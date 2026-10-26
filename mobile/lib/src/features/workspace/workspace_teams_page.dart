@@ -7,6 +7,8 @@ import 'workspace_files_panel.dart';
 import 'workspace_projects_page.dart';
 import 'workspace_shell.dart';
 import 'workspace_tasks.dart';
+import 'workspace_repository_picker.dart';
+import 'workspace_team_activity.dart';
 
 class WorkspaceTeamsPage extends StatefulWidget {
   const WorkspaceTeamsPage({
@@ -32,6 +34,21 @@ class _WorkspaceTeamsPageState extends State<WorkspaceTeamsPage> {
   late String? _selectedId = widget.initialTeamId;
   bool _creating = false;
   int _tab = 0;
+
+  Future<void> _constructionTeam() async {
+    final id = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) =>
+          _ConstructionTeamDialog(api: widget.api, accounts: widget.accounts),
+    );
+    if (id == null || !mounted) return;
+    setState(() {
+      _selectedId = id;
+      _tab = 0;
+    });
+    widget.onChanged();
+  }
 
   @override
   void didUpdateWidget(covariant WorkspaceTeamsPage oldWidget) {
@@ -90,6 +107,13 @@ class _WorkspaceTeamsPageState extends State<WorkspaceTeamsPage> {
                 ),
               ),
             const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: _constructionTeam,
+              icon: const Icon(Icons.construction),
+              label: const Text(
+                'Dodaj BuildApp — 5 botów web/mobile dla budowlańców',
+              ),
+            ),
             Align(
               alignment: Alignment.centerLeft,
               child: FilledButton.icon(
@@ -102,6 +126,7 @@ class _WorkspaceTeamsPageState extends State<WorkspaceTeamsPage> {
         ),
       );
     }
+
     final project = widget.data.projects
         .where((project) => project.id == team.projectId)
         .firstOrNull;
@@ -137,6 +162,7 @@ class _WorkspaceTeamsPageState extends State<WorkspaceTeamsPage> {
                     'Boty i GitHub',
                     'Współpraca',
                     'PDF',
+                    'Podgląd botów',
                   ].indexed)
                     ChoiceChip(
                       label: Text(label),
@@ -148,6 +174,13 @@ class _WorkspaceTeamsPageState extends State<WorkspaceTeamsPage> {
             ],
           ),
         ),
+        if (_tab == 4)
+          WorkspaceTeamActivity(
+            key: ValueKey('activity-${team.id}'),
+            team: team,
+            api: widget.api,
+            onChanged: widget.onChanged,
+          ),
         Visibility(
           visible: _tab == 0,
           maintainState: true,
@@ -199,6 +232,96 @@ class _WorkspaceTeamsPageState extends State<WorkspaceTeamsPage> {
       ],
     );
   }
+}
+
+class _ConstructionTeamDialog extends StatefulWidget {
+  const _ConstructionTeamDialog({required this.api, required this.accounts});
+  final ApiClient api;
+  final List<WorkspaceAccount> accounts;
+  @override
+  State<_ConstructionTeamDialog> createState() =>
+      _ConstructionTeamDialogState();
+}
+
+class _ConstructionTeamDialogState extends State<_ConstructionTeamDialog> {
+  WorkspaceRepositorySelection? _selection;
+  bool _saving = false;
+  String? _error;
+
+  Future<void> _save() async {
+    final selection = _selection;
+    if (selection == null) return;
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      final result = await widget.api.request(
+        '/workspace/templates/construction',
+        method: 'POST',
+        data: {
+          'githubAccountId': selection.accountId,
+          'repository': selection.repository,
+        },
+      );
+      if (result['teamId'] is! String) {
+        throw const ApiException(
+          'INVALID_WORKSPACE_RESPONSE',
+          'Serwer nie potwierdził utworzenia zespołu.',
+        );
+      }
+      if (mounted) Navigator.pop(context, result['teamId'] as String);
+    } on Exception catch (error) {
+      if (mounted) setState(() => _error = error.toString());
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => PopScope(
+    canPop: !_saving,
+    child: AlertDialog(
+      title: const Text('BuildApp — zespół 5 botów'),
+      content: SizedBox(
+        width: 560,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text(
+                'Architekt/Tech Lead, Web UX, Flutter Mobile, Backend i QA/DevOps. Powstanie projekt, pięć ról i instancji oraz pięć zadań. Żaden bot nie zostanie uruchomiony. Ponowne dodanie tej samej konfiguracji nie tworzy duplikatów.',
+              ),
+              const SizedBox(height: 16),
+              WorkspaceRepositoryPicker(
+                api: widget.api,
+                accounts: widget.accounts,
+                enabled: !_saving,
+                onChanged: (value) => setState(() => _selection = value),
+              ),
+              if (_saving) const LinearProgressIndicator(),
+              if (_error != null)
+                Text(
+                  _error!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.pop(context),
+          child: const Text('Anuluj'),
+        ),
+        FilledButton(
+          onPressed: _saving || _selection == null ? null : _save,
+          child: const Text('Zapisz zespół i 5 botów'),
+        ),
+      ],
+    ),
+  );
 }
 
 class _TeamCreator extends StatefulWidget {

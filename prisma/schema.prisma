@@ -350,6 +350,7 @@ model ProjectTask {
   priority    TaskPriority      @default(NORMAL)
   botId       String?
   teamId      String?
+  githubStageId String?         @unique
   createdAt   DateTime          @default(now()) @db.Timestamptz(6)
   updatedAt   DateTime          @updatedAt @db.Timestamptz(6)
   project     Project           @relation(fields: [projectId], references: [id], onDelete: Restrict)
@@ -359,6 +360,7 @@ model ProjectTask {
   prerequisites TaskDependency[] @relation("TaskPrerequisites")
   dependents    TaskDependency[] @relation("TaskDependents")
   runs          TaskRun[]
+  githubStage   Stage?          @relation(fields: [githubStageId], references: [id], onDelete: Restrict)
 
   @@index([projectId, status, updatedAt])
   @@index([userId, updatedAt])
@@ -589,6 +591,7 @@ model Stage {
   pullRequests          PullRequest[]
   notifications         Notification[]
   auditEvents           AuditEvent[]
+  projectTask           ProjectTask?
 
   @@unique([botId, number])
   @@index([botId, status, number])

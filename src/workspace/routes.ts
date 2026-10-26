@@ -5,6 +5,7 @@ import type { VerifiedRepository } from '../github/repository-access.ts';
 import { ApiError, isUniqueConstraintError, parseRequest } from '../http/errors.ts';
 import { validateHierarchy } from './hierarchy.ts';
 import { registerWorkspaceMaterialRoutes } from './materials.ts';
+import { registerConstructionTemplate } from './construction-template.ts';
 
 const definitionSchema = z.object({
   name: z.string().trim().min(1).max(100),
@@ -106,6 +107,7 @@ export function registerWorkspaceRoutes(app: FastifyInstance, options: {
 }): void {
   const { prisma, authenticate, verifyRepository } = options;
   registerWorkspaceMaterialRoutes(app, options);
+  registerConstructionTemplate(app, options);
   const ownedProject = async (id: string, userId: string) => {
     const project = await prisma.project.findFirst({ where: { id, userId } });
     if (!project) throw new ApiError(404, 'PROJECT_NOT_FOUND', 'Nie znaleziono projektu.');
@@ -435,8 +437,12 @@ export function registerWorkspaceRoutes(app: FastifyInstance, options: {
     const { id } = parseRequest(idSchema, request.params);
     const input = parseRequest(taskEditSchema, request.body);
     await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "ProjectTask" WHERE "id" = ${id} AND "userId" = ${userId} FOR UPDATE`;
       const task = await tx.projectTask.findFirst({ where: { id, userId } });
       if (!task) throw new ApiError(404, 'TASK_NOT_FOUND', 'Nie znaleziono zadania.');
+      if (task.githubStageId) {
+        throw new ApiError(409, 'TASK_HAS_AGENT_STAGE', 'Zadanie ma zapisany etap GitHub. Zachowaj jego treść i przypisanie; kolejne zmiany dodaj jako nowe zadanie.');
+      }
       if (task.teamId) await lockTeam(tx, task.teamId, userId);
       if (input.botId) {
         const membership = task.teamId && await tx.teamBot.findFirst({
@@ -460,6 +466,8 @@ export function registerWorkspaceRoutes(app: FastifyInstance, options: {
         SELECT "id" FROM "ProjectTask" WHERE "id" = ${id} AND "userId" = ${userId} FOR UPDATE
       `;
       if (rows.length !== 1) throw new ApiError(404, 'TASK_NOT_FOUND', 'Nie znaleziono zadania.');
+      const task = await tx.projectTask.findUniqueOrThrow({ where: { id } });
+      if (task.githubStageId) throw new ApiError(409, 'TASK_HAS_AGENT_STAGE', 'Zachowaj historię zadania powiązanego z GitHub Agents.');
       const dependents = await tx.taskDependency.count({ where: { dependsOnTaskId: id } });
       if (dependents) throw new ApiError(409, 'TASK_HAS_DEPENDENTS', 'Inne zadania zależą od tego zadania. Najpierw zmień ich zależności.');
       await tx.taskDependency.deleteMany({ where: { taskId: id } });
@@ -469,5 +477,50 @@ export function registerWorkspaceRoutes(app: FastifyInstance, options: {
       });
     });
     return reply.status(204).send();
+  });
+
+  app.get('/api/workspace/tasks/:id/agent-stage', async (request) => {
+    const userId = await authenticate(request, false);
+    const { id } = parseRequest(idSchema, request.params);
+    const task = await prisma.projectTask.findFirst({ where: { id, userId }, include: { githubStage: true } });
+    if (!task) throw new ApiError(404, 'TASK_NOT_FOUND', 'Nie znaleziono zadania.');
+    return { stage: task.githubStage ? { id: task.githubStage.id, status: task.githubStage.status } : null, execution: 'GITHUB_HOSTED' };
+  });
+
+  app.post('/api/workspace/tasks/:id/agent-stage', async (request) => {
+    const userId = await authenticate(request, true);
+    const { id } = parseRequest(idSchema, request.params);
+    const stage = await prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT "id" FROM "ProjectTask" WHERE "id" = ${id} AND "userId" = ${userId} FOR UPDATE`;
+      const task = await tx.projectTask.findFirst({
+        where: { id, userId },
+        include: { githubStage: true, project: true },
+      });
+      if (!task) throw new ApiError(404, 'TASK_NOT_FOUND', 'Nie znaleziono zadania.');
+      if (task.githubStage) return task.githubStage;
+      if (!task.botId) throw new ApiError(409, 'TASK_BOT_REQUIRED', 'Przypisz zadanie botowi.');
+      if (task.status === 'COMPLETED') throw new ApiError(409, 'TASK_ALREADY_COMPLETED', 'To zadanie jest już ukończone.');
+      await tx.$queryRaw`SELECT "id" FROM "Bot" WHERE "id" = ${task.botId} AND "userId" = ${userId} FOR UPDATE`;
+      const bot = await tx.bot.findFirst({ where: { id: task.botId, userId } });
+      if (!bot || bot.repository !== task.project.repository) {
+        throw new ApiError(409, 'TASK_REPOSITORY_MISMATCH', 'Bot musi należeć do repozytorium projektu.');
+      }
+      const latest = await tx.stage.findFirst({ where: { botId: bot.id }, orderBy: { number: 'desc' } });
+      const created = await tx.stage.create({ data: {
+        botId: bot.id, number: (latest?.number ?? 0) + 1, title: task.title,
+        description: [
+          task.description, `Projekt: ${task.project.name}`, task.project.brief, task.project.repositoryContext,
+          'Pracuj zdalnie w repozytorium GitHub. Przygotuj zmiany i PR; nie scalaj ani nie wdrażaj bez zgody właściciela.',
+        ].filter(Boolean).join('\n\n'),
+        acceptanceCriteria: ['Zaimplementuj opis zadania.', 'Uruchom odpowiednie testy i zapisz rzeczywiste wyniki w PR.', 'Pozostaw PR do ręcznego przeglądu właściciela.'],
+      } });
+      await tx.projectTask.update({ where: { id }, data: { githubStageId: created.id } });
+      await tx.auditEvent.create({ data: {
+        userId, botId: bot.id, stageId: created.id, action: 'GITHUB_AGENT_STAGE_PREPARED',
+        targetType: 'ProjectTask', targetId: id,
+      } });
+      return created;
+    });
+    return { stage: { id: stage.id, status: stage.status }, execution: 'GITHUB_HOSTED' };
   });
 }

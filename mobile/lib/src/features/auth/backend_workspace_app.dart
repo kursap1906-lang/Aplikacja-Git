@@ -5,6 +5,9 @@ import '../../control_center_theme.dart';
 import '../workspace/live_workspace_home.dart';
 import 'auth_completion_page.dart';
 import 'backend_setup_home.dart';
+import 'authenticated_workspace_gate.dart';
+import '../bots/bot_detail_page.dart';
+import '../bots/pull_request_page.dart';
 
 class BackendWorkspaceApp extends StatefulWidget {
   const BackendWorkspaceApp({required this.initialUri, super.key});
@@ -51,6 +54,40 @@ class _BackendWorkspaceAppState extends State<BackendWorkspaceApp> {
         builder: (context, state) => const LiveWorkspaceRoot(),
       ),
       GoRoute(path: '/dashboard', redirect: (context, state) => '/workspace'),
+      GoRoute(
+        path: '/bots/:botId',
+        builder: (context, state) => AuthenticatedWorkspaceGate(
+          builder: (context, session, logout) => Scaffold(
+            appBar: AppBar(
+              title: const Text('Review bota'),
+              leading: IconButton(
+                onPressed: () => context.go('/workspace'),
+                icon: const Icon(Icons.arrow_back),
+              ),
+            ),
+            body: BotDetailPage(botId: state.pathParameters['botId']!),
+          ),
+        ),
+      ),
+      GoRoute(
+        path: '/bots/:botId/pull-requests/:pullRequestId',
+        builder: (context, state) => AuthenticatedWorkspaceGate(
+          builder: (context, session, logout) => Scaffold(
+            appBar: AppBar(
+              title: const Text('Pull Request i dowody testów'),
+              leading: IconButton(
+                onPressed: () =>
+                    context.go('/bots/${state.pathParameters['botId']}'),
+                icon: const Icon(Icons.arrow_back),
+              ),
+            ),
+            body: PullRequestPage(
+              botId: state.pathParameters['botId']!,
+              pullRequestId: state.pathParameters['pullRequestId']!,
+            ),
+          ),
+        ),
+      ),
       GoRoute(path: '/login', redirect: (context, state) => '/connect'),
     ],
     errorBuilder: (context, state) => Scaffold(

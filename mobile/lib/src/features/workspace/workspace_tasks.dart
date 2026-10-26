@@ -4,6 +4,7 @@ import '../../core/api.dart';
 import 'workspace_data.dart';
 import 'workspace_shell.dart';
 import 'workspace_analysis.dart';
+import 'workspace_agent_dialog.dart';
 
 const workspaceTaskPriorities = {
   'LOW': 'Niski',
@@ -455,8 +456,24 @@ class _WorkspaceTeamTasksState extends State<WorkspaceTeamTasks> {
                               }
                             },
                     ),
-                    Row(
+                    Wrap(
+                      spacing: 8,
                       children: [
+                        OutlinedButton.icon(
+                          onPressed:
+                              _busyTask != null ||
+                                  task.botId == null ||
+                                  task.status == 'COMPLETED'
+                              ? null
+                              : () => showWorkspaceAgent(
+                                  context,
+                                  api: widget.api,
+                                  task: task,
+                                  onChanged: widget.onChanged,
+                                ),
+                          icon: const Icon(Icons.cloud_outlined),
+                          label: const Text('Start / podgląd zadania'),
+                        ),
                         TextButton.icon(
                           onPressed: _busyTask != null
                               ? null

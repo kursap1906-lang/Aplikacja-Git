@@ -6,6 +6,7 @@ import { PrismaClient } from '../generated/prisma/client.ts';
 import { createApp } from '../app.ts';
 import { parseConfig } from '../config.ts';
 import { encryptSecret } from '../security/secrets.ts';
+import { copilotCapabilities, type CopilotProvider } from '../github/copilot-provider.ts';
 
 test('real database persists shared projects and isolates team bot instances', async (context) => {
   const databaseUrl = process.env.WORKSPACE_TEST_DATABASE_URL;
@@ -25,16 +26,50 @@ test('real database persists shared projects and isolates team bot instances', a
   let prisma = connect();
   let githubStatus = 200;
   const accountTokens: string[] = [];
+  let branchCreates = 0;
+  let openBotPull = false;
+  const branches = new Set<string>();
   const fetcher: typeof fetch = async (_url, options) => {
     const authorization = new Headers(options?.headers).get('authorization');
     assert.ok(authorization === 'Bearer fixture-access-a' || authorization === 'Bearer fixture-access-b');
     accountTokens.push(authorization);
+    if (String(_url).includes('/pulls?')) return Response.json(openBotPull ? [{ number: 8 }] : []);
+    if (String(_url).includes('/git/ref/heads/ccc/')) {
+      return branches.has(String(_url).split('/heads/')[1]!) ? Response.json({ object: { sha: 'a'.repeat(40) } }) : new Response('', { status: 404 });
+    }
+    if (String(_url).includes('/git/ref/heads/')) return Response.json({ object: { sha: 'a'.repeat(40) } });
+    if (String(_url).endsWith('/git/refs')) {
+      branchCreates++;
+      const body = JSON.parse(String(options?.body));
+      branches.add(body.ref.replace('refs/heads/', ''));
+      return Response.json({ ref: body.ref }, { status: 201 });
+    }
+    if (String(_url).endsWith('/pulls/7')) {
+      return Response.json({
+        number: 7, title: 'Remote fixture result', body: 'Test fixture PR', state: 'open', draft: false,
+        html_url: 'https://github.com/fixture/repository/pull/7', merged_at: null,
+        head: { ref: 'copilot/fixture', sha: 'a'.repeat(40) }, base: { ref: 'main' },
+        user: { login: 'fixture' }, updated_at: '2026-10-26T22:00:00Z',
+      });
+    }
     return Response.json({
       id: 123, full_name: 'fixture/repository', default_branch: 'main',
       permissions: { push: true },
     }, { status: githubStatus });
   };
-  let app = createApp({ prisma, config, fetcher });
+  let launches = 0;
+  const provider: CopilotProvider = {
+    capabilities: copilotCapabilities,
+    launchTask: async input => {
+      assert.equal(input.repository, 'fixture/repository');
+      assert.ok(input.prompt.includes('Test fixture only') || input.prompt.includes('Pracuj zdalnie'));
+      if (input.prompt.includes('Pracuj zdalnie')) assert.match(input.headBranch!, /^ccc\/bot-/);
+      launches++;
+      return { id: `fixture-task-${launches}`, state: 'queued', html_url: 'https://github.com/fixture/repository' };
+    },
+    getTask: async () => ({ id: `fixture-task-${launches}`, state: 'completed' }),
+  };
+  let app = createApp({ prisma, config, fetcher, copilotProvider: provider });
   context.after(async () => app.close());
 
   const register = async (email: string) => {
@@ -413,16 +448,15 @@ test('real database persists shared projects and isolates team bot instances', a
   assert.ok(transitionId);
   const revisionFile = await upload(`/api/workspace/revisions/${transitionId}/files`, sampleBytes, 'review.bin');
   assert.equal(revisionFile.statusCode, 201, revisionFile.body);
+  await prisma.botWorkSchedule.update({ where: { botId: frontend.bots[0].botId }, data: { enabled: false } });
   const legacyStart = await app.inject({
     method: 'POST', url: `/api/stages/${stage.id}/start`, headers: alice.headers, payload: {},
   });
-  assert.equal(legacyStart.statusCode, 409, legacyStart.body);
-  assert.equal(legacyStart.json().error.code, 'SDK_RUNTIME_REQUIRED');
-  assert.equal(await prisma.backgroundJob.count(), 0);
+  assert.equal(legacyStart.statusCode, 202, legacyStart.body);
 
   await app.close();
   prisma = connect();
-  app = createApp({ prisma, config, fetcher });
+  app = createApp({ prisma, config, fetcher, copilotProvider: provider });
   workspaceResponse = await app.inject({ method: 'GET', url: '/api/workspace', headers: alice.headers });
   assert.equal(workspaceResponse.statusCode, 200, workspaceResponse.body);
   workspace = workspaceResponse.json();
@@ -452,4 +486,95 @@ test('real database persists shared projects and isolates team bot instances', a
   });
   assert.equal(persistedRevisions.json().revisions[0].details.reason, 'Add the missing loading state.');
   assert.equal(persistedRevisions.json().revisions[0].files[0].filename, 'review.bin');
+
+  const templateInput = { githubAccountId: accountA.id, repository: 'fixture/repository' };
+  const templates = await Promise.all([1, 2].map(() => app.inject({
+    method: 'POST', url: '/api/workspace/templates/construction', headers: alice.headers, payload: templateInput,
+  })));
+  assert.deepEqual(templates.map(result => result.statusCode).sort(), [200, 201]);
+  assert.equal(templates[0].json().teamId, templates[1].json().teamId);
+  const templateTeam = await prisma.team.findUniqueOrThrow({
+    where: { id: templates[0].json().teamId }, include: { bots: true, tasks: true },
+  });
+  assert.equal(templateTeam.bots.length, 5);
+  assert.equal(templateTeam.tasks.length, 5);
+  const remoteTask = templateTeam.tasks.find(task => task.title.startsWith('Zaprojektuj MVP'))!;
+  const agentUrl = `/api/workspace/tasks/${remoteTask.id}/agent-stage`;
+  const notPrepared = await app.inject({ url: agentUrl, headers: alice.headers });
+  assert.equal(notPrepared.json().stage, null);
+  const foreign = await app.inject({ method: 'POST', url: agentUrl, headers: bob.headers });
+  assert.equal(foreign.statusCode, 404);
+  const prepared = await Promise.all([1, 2].map(() => app.inject({ method: 'POST', url: agentUrl, headers: alice.headers })));
+  assert.equal(prepared[0].statusCode, 200, prepared[0].body);
+  assert.equal(prepared[0].json().stage.id, prepared[1].json().stage.id);
+  const remoteStageId: string = prepared[0].json().stage.id;
+  const beforeLaunch = launches;
+  const beforeBranch = branchCreates;
+  const remoteStart = await app.inject({
+    method: 'POST', url: `/api/stages/${remoteStageId}/start`, headers: alice.headers, payload: {},
+  });
+  assert.equal(remoteStart.statusCode, 202, remoteStart.body);
+  assert.equal(branchCreates, beforeBranch + 1);
+  assert.equal(launches, beforeLaunch + 1);
+  assert.equal(branchCreates, beforeBranch + 1);
+  assert.equal((await prisma.projectTask.findUniqueOrThrow({ where: { id: remoteTask.id } })).status, 'IN_PROGRESS');
+  const duplicateStart = await app.inject({
+    method: 'POST', url: `/api/stages/${remoteStageId}/start`, headers: alice.headers, payload: {},
+  });
+  assert.equal(duplicateStart.statusCode, 409);
+  assert.equal(launches, beforeLaunch + 1);
+  const remoteStatus = await app.inject({ url: `/api/stages/${remoteStageId}/task`, headers: alice.headers });
+  assert.equal(remoteStatus.statusCode, 200, remoteStatus.body);
+  assert.equal(remoteStatus.json().stage.status, 'WAITING_APPROVAL');
+  assert.equal((await prisma.projectTask.findUniqueOrThrow({ where: { id: remoteTask.id } })).status, 'IN_PROGRESS');
+  const deleteHistory = await app.inject({ method: 'DELETE', url: `/api/workspace/tasks/${remoteTask.id}`, headers: alice.headers });
+  assert.equal(deleteHistory.statusCode, 409);
+  const linkUrl = `/api/workspace/github/pulls/7/link-stage?accountId=${accountA.id}&repository=fixture/repository`;
+  const linked = await app.inject({
+    method: 'POST', url: linkUrl, headers: alice.headers, payload: { stageId: remoteStageId },
+  });
+  assert.equal(linked.statusCode, 200, linked.body);
+  assert.equal(linked.json().stageId, remoteStageId);
+  const storedPull = await prisma.pullRequest.findUniqueOrThrow({ where: { id: linked.json().pullRequestId } });
+  assert.equal(storedPull.stageId, remoteStageId);
+  assert.equal(storedPull.headBranch, 'copilot/fixture');
+  const foreignLink = await app.inject({
+    method: 'POST', url: linkUrl, headers: bob.headers, payload: { stageId: remoteStageId },
+  });
+  assert.equal(foreignLink.statusCode, 404);
+  const duplicateLink = await app.inject({
+    method: 'POST', url: linkUrl, headers: alice.headers, payload: { stageId: remoteStageId },
+  });
+  assert.equal(duplicateLink.statusCode, 200, duplicateLink.body);
+  assert.equal(duplicateLink.json().pullRequestId, linked.json().pullRequestId);
+  const bypass = await app.inject({
+    method: 'PATCH', url: `/api/tasks/${remoteTask.id}`, headers: alice.headers, payload: { status: 'COMPLETED' },
+  });
+  assert.equal(bypass.statusCode, 409, bypass.body);
+  await prisma.stage.update({ where: { id: remoteStageId }, data: { status: 'APPROVED' } });
+  const nextTask = await prisma.projectTask.create({ data: {
+    userId: remoteTask.userId, projectId: remoteTask.projectId, teamId: remoteTask.teamId,
+    botId: remoteTask.botId, title: 'Next fixture increment', description: 'Synthetic continuation.',
+  } });
+  const nextPrepared = await app.inject({
+    method: 'POST', url: `/api/workspace/tasks/${nextTask.id}/agent-stage`, headers: alice.headers,
+  });
+  assert.equal(nextPrepared.statusCode, 200, nextPrepared.body);
+  const nextStage = nextPrepared.json().stage.id;
+  openBotPull = true;
+  const blockedNext = await app.inject({
+    method: 'POST', url: `/api/stages/${nextStage}/start`, headers: alice.headers, payload: {},
+  });
+  assert.equal(blockedNext.statusCode, 409, blockedNext.body);
+  assert.equal(blockedNext.json().error.code, 'BOT_BRANCH_PR_OPEN');
+  assert.equal(launches, beforeLaunch + 1);
+  assert.equal((await prisma.stage.findUniqueOrThrow({ where: { id: nextStage } })).status, 'PENDING');
+  openBotPull = false;
+  const nextStart = await app.inject({
+    method: 'POST', url: `/api/stages/${nextStage}/start`, headers: alice.headers, payload: {},
+  });
+  assert.equal(nextStart.statusCode, 202, nextStart.body);
+  assert.equal(branchCreates, beforeBranch + 1);
+  const stageBranches = await prisma.stage.findMany({ where: { id: { in: [remoteStageId, nextStage] } } });
+  assert.equal(stageBranches[0]?.branchName, stageBranches[1]?.branchName);
 });

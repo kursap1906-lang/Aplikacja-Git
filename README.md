@@ -5,10 +5,82 @@ projektu z jawną akceptacją. API Fastify przechowuje dane w PostgreSQL.
 
 ## Aktualne wydanie staging
 
-`staging-live-20261026-2050` działa pod
+`staging-agents-20261026-r2` działa pod
 `https://staging.copilotcontrolcenter.com/`. Root otwiera rzeczywisty panel
 API; demonstracja jest dostępna wyłącznie pod `/demo`. Szczegółowy bieżący
 status oraz jawne braki są na początku `PROJECT_STATUS.md`.
+
+### Panel i zdalne GitHub Agents
+
+- Pulpit ponownie zawiera kafelki botów, otwartych/zakończonych zadań,
+  oczekujących akceptacji i przejście do kosztów. Nieznane faktury i salda
+  nie są zastępowane fikcyjnymi kwotami.
+- **Zespoły AI → Dodaj BuildApp** zapisuje pięć ról/instancji (Tech Lead,
+  Web UX, Flutter Mobile, Backend, QA/DevOps), projekt i zadania z zależnościami.
+  Wybranie konta i repozytorium jest wymagane. Ponowny zapis tej samej
+  konfiguracji nie duplikuje zespołu. Sam zapis nie uruchamia agentów.
+- **Zadania → Start / podgląd zadania → Uruchom na GitHub** zgłasza etap do GitHub
+  Agent Tasks API. Wykonanie jest zdalne, w repozytorium; nie ma lokalnego
+  checkoutu, procesu wykonawczego SDK ani automatycznego startu z kalendarza.
+  API wymaga obecnie Copilot Business/Enterprise oraz tokenu użytkownika
+  z uprawnieniami repozytoryjnymi `Agent tasks` read/write. Tokeny instalacyjne
+  GitHub App nie są obsługiwane. Odmowa lub niepewny wynik zgłoszenia są
+  wyświetlane jawnie, bez automatycznego ponowienia.
+- **Zespoły AI → Podgląd botów** pokazuje wszystkie instancje, aktualny etap,
+  status GitHub, postęp zadań, gałąź i przejście do startu/review. Aktywne
+  etapy odświeżane są co 15 sekund tylko przy otwartym podglądzie.
+  Dialog pokazuje szczegółowy prompt, metadane sesji i powiązany PR.
+- Każdy bot zespołowy używa jednej gałęzi `ccc/bot-<id>` przekazanej jako
+  `head_ref`. Kolejny etap wymaga zatwierdzenia poprzedniego oraz zamknięcia
+  lub scalenia poprzedniego PR. Aplikacja nie resetuje gałęzi ani nie wykonuje merge.
+- Analiza AI rozbija wymagania na testowalne przyrosty z krokami, kryteriami
+  odbioru i weryfikacją. Zapisuje zależności między zadaniami oraz kolejność
+  zadań tej samej instancji; odrzuca cykle, nieznane klucze i zbyt długie prompty.
+- GitHub nie udostępnia pełnego wewnętrznego dialogu agenta ani API do
+  automatycznego odpowiadania na wszystkie pytania sesji. Z panelu można
+  jawnie wysłać komentarz `@copilot` do istniejącego PR z instrukcją kontynuacji.
+  Potwierdzenie komentarza nie jest potwierdzeniem wznowienia pracy. Prompt
+  nakazuje samodzielnie podejmować zwykłe decyzje i zakończyć etap dowodami
+  testów do ręcznej akceptacji. Brak uprawnień lub wymagane działania właściciela
+  nie są ukrywane. Nie deklarujemy nieobsługiwanej autonomicznej rozmowy.
+- Otwarcie dialogu tylko odczytuje stan. Dopiero jawny start zapisuje snapshot
+  zadania jako etap; późniejsze zmiany dodawaj jako nowe zadanie. Historia
+  zgłoszonego zadania nie może być usunięta/przepisana. Weryfikowane są
+  zależności, zatwierdzenie poprzedniego etapu, harmonogram bota i budżet.
+- **GitHub i PR** pobiera PR z wybranego konta/repozytorium, stronicuje listę,
+  pokazuje diff, komentarze i CI dla konkretnego SHA, pozwala utworzyć draft
+  lub wysłać komentarz. Nie wykonuje merge. Częściowy raport jest oznaczony.
+  Repozytoria tylko do odczytu są dostępne do przeglądania; GitHub egzekwuje
+  prawa zapisu dla mutacji.
+- W szczegółach PR można powiązać go z własnym etapem tego samego konta
+  i repozytorium oraz przejść do istniejącego review/testu manualnego.
+  Powiązanie nie zatwierdza etapu. Zielone CI i test manualny muszą dotyczyć
+  aktualnego SHA. Dopiero zatwierdzenie etapu kończy powiązane zadanie.
+- **Koszty i kredyty** ma osobne wskaźniki kołowe i paski każdego konta/pakietu.
+  Brak raportu jest oznaczony, nie pokazywany jako zero. Odczyt metadanych SDK
+  nie uruchamia bota i nie dowodzi dostępności GitHub Agents. Zapisany limit
+  dopłat nie zmienia limitu rozliczeniowego GitHuba.
+- **Ustawienia** zawierają katalog integracji z filtrowaniem, konta GitHub,
+  serwer/MCP, automatyzacje i bezpieczeństwo. Sprawdzenia obsługiwanych usług
+  są jawne i nie wykonują płatnego wywołania. Niezaimplementowane adaptery
+  (np. Blender, S3, Slack) są oznaczone jako niedostępne; nie pozorujemy
+  połączenia ani nie zbieramy nieużywanych kluczy.
+
+Nowe API: `GET /api/workspace/settings`,
+`POST /api/workspace/settings/integrations/:id/test`,
+`POST /api/workspace/templates/construction`,
+`GET|POST /api/workspace/tasks/:id/agent-stage`,
+`GET|POST /api/workspace/github/pulls`,
+`GET /api/workspace/github/pulls/:number`,
+`POST /api/workspace/github/pulls/:number/comments` i
+`POST /api/workspace/github/pulls/:number/link-stage`.
+Trasy PR wymagają query `accountId` i `repository`; mutacje sesji i CSRF.
+Migracja `20261026220000_remote_project_tasks` wiąże zadanie z etapem.
+Lokalne `/api/workspace/tasks/:id/runs` pozostaje wyłączone (`503`);
+nie jest to ścieżka używana przez przycisk Agent GitHub.
+
+Poniższe starsze opisy „niedokończonego SDK” dotyczą wyłącznie lokalnego
+wykonawcy, nie nowej ścieżki GitHub Agents opisanej powyżej.
 
 Po zapisaniu zmian w lokalnym commicie publikacja odbywa się na istniejącą
 gałąź, bez wymuszania nadpisania historii:
@@ -32,7 +104,13 @@ Alternatywą jest skonfigurowany klucz SSH z prawem zapisu.
 Autoryzacja konta w aplikacji nie nadaje uprawnień programowi Git na VPS.
 Push publikuje kod; staging wdrażany jest osobno, nie automatycznie przez Git.
 
-## Zasoby VPS i pięć botów
+## Zasoby VPS i pięć botów — wcześniejszy wariant lokalnego SDK
+
+**Aktualny panel nie używa tego wariantu.** Kod, zależności i buildy botów
+wykonuje GitHub Agents po stronie GitHuba. VPS obsługuje panel, bazę i odczyt
+metadanych kont. Poniższe szacunki zachowano jedynie dla ewentualnego,
+osobnego lokalnego wykonawcy; nie są wymaganiem uruchomienia pięciu botów
+w GitHub Agents ani deklaracją działania takiego wykonawcy.
 
 Poniższe wartości są szacunkiem do planowania, nie wynikiem testu obciążenia
 pięciu wykonawców. Modele Copilot/OpenAI działają u dostawców, a VPS utrzymuje

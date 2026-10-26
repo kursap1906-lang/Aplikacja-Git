@@ -2,7 +2,72 @@
 
 Ostatnia aktualizacja: 2026-10-26
 
-## Aktualny stan stagingu — wydanie `staging-live-20261026-2050`
+## Wydanie `staging-agents-20261026-r2`
+
+- Naprawiono czarne podpisy kafelków w ciemnym motywie i zwiększono kontrast
+  podpisów/etykiet. Dodano regresję dla kolorów tekstu.
+- Analiza AI zapisuje małe, szczegółowe zadania: kroki, kryteria, weryfikację
+  i rzeczywiste zależności; kolejne zadania jednego bota są sekwencyjne.
+- Podgląd botów pokazuje całą ekipę, etapy, postęp i stałe gałęzie; dialog
+  agenta pokazuje metadane sesji, prompt i powiązany PR. Polling nie uruchamia zadań.
+- Jedna gałąź na bota (`head_ref`); kolejny etap blokuje otwarty poprzedni PR.
+  Historia powiązań PR nie jest przepisywana. API blokuje ręczne obejście review.
+- Kontynuacja `@copilot` w tym samym PR wymaga jawnego wysłania. Publiczne API
+  GitHuba nie zapewnia pełnej rozmowy ani automatycznego odpowiadania na pytania.
+  Dostęp do samego wykonania zależy od planu/uprawnień konta, nie testowano
+  rzeczywistych uruchomień użytkownika.
+- Backend: 75/75 testów; PostgreSQL: 4/4 scenariusze na świeżej bazie,
+  obejmujące szczegółowe zależności, brak duplikacji startu, blokadę otwartego
+  PR oraz ponowne użycie tej samej gałęzi przez kolejny etap.
+- Flutter: 31/31 celowanych testów panelu, aktywności botów, kosztów,
+  zespołów i uwierzytelnienia. Analyze: 6 wcześniej istniejących informacji,
+  bez błędów/ostrzeżeń. Release Web i oba obrazy Docker zbudowano poprawnie.
+- Backup przed r2: `backups/staging/postgres-20261026T232411.349044094Z.dump`
+  (zweryfikowane archiwum pg_restore). Brak nowej migracji względem r1.
+- Wdrożono r2 pod `https://staging.copilotcontrolcenter.com/`.
+  API/baza są zdrowe, 13 migracji zastosowanych. SHA-256 publicznego Web
+  i lokalnego buildu: `e19c6902480bb6418732a34161eeb8191a02256f2cc65d7b8575fd74cea85215`.
+  Chromium potwierdził panel, ustawienia, GitHub/PR, koszty i mobilny viewport
+  bez błędów runtime. Konto smoke oraz tymczasowy swap buildowy usunięto.
+- Oryginalny przykładowy zespół ma pięć botów IDLE i pięć zadań TODO
+  w `kursap1906-lang/test`. Nie uruchomiono agentów ani płatnej analizy.
+  Inne, utworzone przez użytkownika zespoły i zadania pozostawiono bez zmian.
+
+## Wcześniejsze wydanie `staging-agents-20261026-r1`
+
+- Przywrócono pulpit z kafelkami. Dodano rzeczywisty widok GitHub/PR:
+  wybór konta/repozytorium, listę z paginacją, diff, CI dla SHA, komentarze,
+  tworzenie draft PR oraz powiązanie PR z etapem i przejście do review.
+- Dodano szablon BuildApp: pięć ról/instancji i pięć zadań z zależnościami
+  dla aplikacji budowlanej web/mobile. Zapis jest atomowy i idempotentny.
+- Boty zespołowe korzystają z GitHub Agent Tasks API, nie lokalnego SDK.
+  Usunięto błędną blokadę startu ról. UI wymaga jawnego startu, odczytuje
+  status i zachowuje historię; API sprawdza właściciela, zależności,
+  harmonogram instancji oraz istniejące bramki etapów i kosztów.
+  Nie uruchamiano rzeczywistych botów. GitHub wymaga planu Business/Enterprise
+  i odpowiednich uprawnień użytkownika; dostęp konkretnego konta do płatnej
+  usługi nie został potwierdzony testem wykonania.
+- Koszty mają oddzielne pierścienie i paski każdego konta/pakietu.
+  Ustawienia ponownie zawierają katalog integracji, kategorie, konta,
+  serwer/MCP, automatyzacje i bezpieczeństwo. Niezaimplementowane adaptery
+  są jawnie niedostępne, a ich klucze nie są zbierane.
+- Dodano trzynastą migrację: powiązanie ProjectTask ze Stage.
+  Backup przed migracją:
+  `backups/staging/postgres-20261026T222708.033787360Z.dump`;
+  odtworzenie sprawdzono w izolowanej bazie `ccc_restore_20261026222739`.
+- Walidacja: 75/75 testów backendu, 4/4 integracyjne scenariusze na świeżej
+  bazie z 13 migracjami, nowe testy widoków i regresje kosztów/logowania.
+  Pełny wcześniejszy zestaw Fluttera 123/123 przeszedł przed końcowym
+  dopięciem review; późniejsze testy celowane 19/19 przeszły.
+  Flutter analyze: tylko 6 istniejących informacji; release Web zbudowany.
+  Próba równoległej walidacji przekroczyła RAM hosta; TypeScript i testy
+  PostgreSQL ponowiono osobno ze świeżą bazą i przeszły. Nie ukryto awarii
+  przez zwiększanie timeoutów transakcji.
+- Nie potwierdzono zgodności wizualnej 1:1 z obrazami 1–5.
+  Nie wdrożono wszystkich adapterów z katalogu, lokalnego
+  wykonawcy SDK, automatycznych harmonogramów ani izolowanego preview.
+
+## Poprzedni stan stagingu — wydanie `staging-live-20261026-2050`
 
 Ta sekcja zastępuje starsze opisy wdrożenia i ograniczeń poniżej; pozostałe
 sekcje są historią prac, nie bieżącym raportem.
