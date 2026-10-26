@@ -21,10 +21,22 @@ OAuth, repozytoria i zadania muszą być zawsze przypisane do właściwego konta
 
 ## Interfejsy integracyjne
 
-Sprawdzono publiczny [GitHub REST API OpenAPI](https://raw.githubusercontent.com/github/rest-api-description/main/descriptions/api.github.com/api.github.com.json) z odczytem bez autoryzacji. Dokumentuje uprawnienia coding agenta organizacji i endpoint konfiguracji cloud agenta repozytorium, ale nie zawiera endpointu do uruchamiania, wznawiania ani monitorowania jego zadania. Integracja nie może zgłaszać tych operacji jako obsługiwanych ani symulować odpowiedzi. Przed ich wdrożeniem należy potwierdzić inny oficjalny, udokumentowany mechanizm.
+Aktualna dokumentacja GitHub REST API opisuje podglądowe (public preview)
+endpointy uruchamiania i sprawdzania stanu zadań Copilot cloud agent.
+`CopilotProvider` używa ich dla repozytorium i konta przypisanych do właściciela
+bota. Uruchomienie wymaga planu Copilot Business lub Enterprise i autoryzacji
+użytkownika z uprawnieniem repozytorium `Agent tasks: read and write`;
+autoryzację tokenu trzeba potwierdzić dla każdego konta i repozytorium.
+Tokeny instalacyjne GitHub App nie są obsługiwane. API nie udostępnia
+wznawiania, wstrzymywania, anulowania ani odczytu logów; te capabilities
+pozostają wyłączone. Status i powiadomienia synchronizują się po ręcznym
+sprawdzeniu zadania, nie przez webhooki ani automatyczny polling.
+Odpowiedź GitHub dotycząca planu lub uprawnień jest pokazywana jako błąd,
+bez pozorowania, że zadanie zostało uruchomione.
 
-`CopilotProvider` powinien jawnie raportować obsługiwane możliwości; brak obsługi tworzenia zadania lub pobierania jego logów jest zwracany jako błąd capability, nie fikcyjny wynik. Standardowe endpointy GitHub do operacji na PR nie oznaczają dostępności API sterującego agentem. Webhooki są weryfikowane, deduplikowane i przypisywane do konta.
+Standardowe endpointy GitHub do operacji na PR nie zastępują endpointów
+coding agent. Webhooki są weryfikowane, deduplikowane i przypisywane do konta.
 
 ## Dostępność i wdrożenie
 
-Środowisko deweloperskie i staging nie otrzymuje dostępu do produkcyjnych sekretów ani danych. Stan serwera OVH nie został sprawdzony: dostępny alias SSH `ovh` wskazuje na użytkownika `codespace` i host `ovh`, a nie potwierdzony serwer i użytkownika `ubuntu`. Połączenie nie zostało nawiązane.
+Środowisko deweloperskie i staging nie otrzymuje dostępu do produkcyjnych sekretów ani danych. Wdrożenie na OVH pozostaje niedokończone do czasu potwierdzenia oddzielnych domen/DNS staging i produkcji oraz uprawnień GitHub OAuth dla Agent Tasks API.

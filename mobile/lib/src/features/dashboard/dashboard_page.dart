@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/api.dart';
 import '../../core/providers.dart';
 import '../../theme.dart';
 
@@ -142,50 +143,104 @@ class _StatTile extends StatelessWidget {
       );
 }
 
-class _BotRow extends StatelessWidget {
+class _BotRow extends ConsumerWidget {
   const _BotRow({required this.bot, required this.onOpen});
   final Map<String, dynamic> bot;
   final VoidCallback onOpen;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final stages = bot['stages'] is List ? bot['stages'] as List : const [];
     final active = stages.cast<Map>().where((stage) => stage['status'] != 'APPROVED').firstOrNull;
+    final waitingStages = stages
+        .whereType<Map>()
+        .where((stage) => stage['status'] == 'WAITING_APPROVAL')
+        .toList();
     final account = bot['githubAccount'] is Map ? bot['githubAccount'] as Map : const {};
 
     return Card(
       margin: const EdgeInsets.only(bottom: 9),
-      child: InkWell(
-        onTap: onOpen,
-        borderRadius: BorderRadius.circular(8),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-          child: Row(children: [
-            CircleAvatar(
-              radius: 18,
-              backgroundColor: AppColors.panelRaised,
-              child: Text((bot['name'] as String? ?? 'B').characters.first.toUpperCase(),
-                  style: const TextStyle(color: AppColors.blue, fontWeight: FontWeight.w700)),
-            ),
-            const SizedBox(width: 12),
-            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(bot['name']?.toString() ?? '', style: const TextStyle(fontWeight: FontWeight.w600)),
-              const SizedBox(height: 3),
-              Text('${bot['repository'] ?? ''} · @${account['login'] ?? ''}',
-                  style: const TextStyle(color: AppColors.muted, fontSize: 12)),
-            ])),
-            if (active is Map && active.isNotEmpty)
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 190),
-                child: Text('${active['number']}. ${active['title']}',
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: AppColors.muted, fontSize: 12)),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            InkWell(
+              onTap: onOpen,
+              borderRadius: BorderRadius.circular(8),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 3),
+                child: Row(children: [
+                  CircleAvatar(
+                    radius: 18,
+                    backgroundColor: AppColors.panelRaised,
+                    child: Text((bot['name'] as String? ?? 'B').characters.first.toUpperCase(),
+                        style: const TextStyle(color: AppColors.blue, fontWeight: FontWeight.w700)),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(bot['name']?.toString() ?? '', style: const TextStyle(fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 3),
+                    Text('${bot['repository'] ?? ''} · @${account['login'] ?? ''}',
+                        style: const TextStyle(color: AppColors.muted, fontSize: 12)),
+                  ])),
+                  if (active is Map && active.isNotEmpty)
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 190),
+                      child: Text('${active['number']}. ${active['title']}',
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: AppColors.muted, fontSize: 12)),
+                    ),
+                  const SizedBox(width: 12),
+                  _StatusIndicator(bot['status']?.toString() ?? 'IDLE'),
+                  const SizedBox(width: 8),
+                  const Icon(Icons.chevron_right_rounded, color: AppColors.muted),
+                ]),
               ),
-            const SizedBox(width: 12),
-            _StatusIndicator(bot['status']?.toString() ?? 'IDLE'),
-            const SizedBox(width: 8),
-            const Icon(Icons.chevron_right_rounded, color: AppColors.muted),
-          ]),
+            ),
+            for (final stage in waitingStages) ...[
+              const Divider(height: 24),
+              Text(
+                'Etap ${stage['number']}: ${stage['title']} · oczekuje na review',
+                style: const TextStyle(color: AppColors.muted, fontSize: 12),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  Tooltip(
+                    message: 'Preview CI/CD nie jest skonfigurowane dla tego etapu.',
+                    child: OutlinedButton.icon(
+                      onPressed: null,
+                      icon: Icon(Icons.play_circle_outline_rounded),
+                      label: Text('Testuj aplikację'),
+                    ),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: () async {
+                      try {
+                        await openCodeEditor(ref.read(apiClientProvider));
+                      } on Object catch (error) {
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text(error.toString())),
+                          );
+                        }
+                      }
+                    },
+                    icon: const Icon(Icons.code_rounded),
+                    label: const Text('Otwórz kod w VS Code'),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: () => context.go('/review?stage=${stage['id']}'),
+                    icon: const Icon(Icons.fact_check_outlined),
+                    label: const Text('Przejdź do review'),
+                  ),
+                ],
+              ),
+            ],
+          ],
         ),
       ),
     );

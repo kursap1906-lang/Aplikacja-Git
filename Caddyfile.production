@@ -1,0 +1,47 @@
+{$STAGING_DOMAIN} {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+	reverse_proxy control-center-staging-api:3000
+}
+
+{$EDITOR_DOMAIN:editor.staging.copilotcontrolcenter.com} {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+	@editor path /editor /editor/*
+	handle @editor {
+		route {
+			uri strip_prefix /editor
+			forward_auth control-center-staging-api:3000 {
+				uri /api/auth/editor/verify
+			}
+			reverse_proxy control-center-staging-editor:8080 {
+				header_up -Cookie
+				header_up -Authorization
+			}
+		}
+	}
+	handle {
+		redir /editor/ 302
+	}
+}
+
+{$PRODUCTION_DOMAIN} {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+	reverse_proxy control-center-production-api:3000
+}

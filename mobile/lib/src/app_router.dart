@@ -10,6 +10,7 @@ import 'features/dashboard/dashboard_page.dart';
 import 'features/notifications/notifications_page.dart';
 import 'features/settings/settings_page.dart';
 import 'features/shell/app_shell.dart';
+import 'features/workspace/workspace_pages.dart';
 
 GoRouter createAppRouter({String initialLocation = '/dashboard'}) => GoRouter(
       initialLocation: initialLocation,
@@ -20,6 +21,8 @@ GoRouter createAppRouter({String initialLocation = '/dashboard'}) => GoRouter(
           builder: (context, state, child) => AppShell(child: child),
           routes: [
             GoRoute(path: '/dashboard', builder: (context, state) => const DashboardPage()),
+            GoRoute(path: '/teams', builder: (context, state) => const TeamsPage()),
+            GoRoute(path: '/bots', builder: (context, state) => const BotsPage()),
             GoRoute(path: '/bots/new', builder: (context, state) => const CreateBotPage()),
             GoRoute(
               path: '/bots/:botId/pull-requests/:pullRequestId',
@@ -33,6 +36,20 @@ GoRouter createAppRouter({String initialLocation = '/dashboard'}) => GoRouter(
               builder: (context, state) => BotDetailPage(botId: state.pathParameters['botId']!),
             ),
             GoRoute(path: '/accounts', builder: (context, state) => const AccountsPage()),
+            GoRoute(path: '/repositories', builder: (context, state) => const RepositoriesPage()),
+            GoRoute(path: '/projects', builder: (context, state) => const ProjectsPage()),
+            GoRoute(path: '/tasks', builder: (context, state) => const TasksPage()),
+            GoRoute(path: '/collaboration', builder: (context, state) => const CollaborationPage()),
+            GoRoute(path: '/pull-requests', builder: (context, state) => const PullRequestsPage()),
+            GoRoute(path: '/code-center', builder: (context, state) => const CodeCenterPage()),
+            GoRoute(
+              path: '/review',
+              builder: (context, state) => ReviewCenterPage(
+                selectedStageId: state.uri.queryParameters['stage'],
+              ),
+            ),
+            GoRoute(path: '/schedule', builder: (context, state) => const SchedulePage()),
+            GoRoute(path: '/costs', builder: (context, state) => const CostsPage()),
             GoRoute(path: '/notifications', builder: (context, state) => const NotificationsPage()),
             GoRoute(path: '/settings', builder: (context, state) => const SettingsPage()),
           ],

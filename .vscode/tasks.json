@@ -1,18 +1,76 @@
 {
-  "version": "2.0.0",
-  "tasks": [
-    {
-      "label": "Control Center: start",
-      "type": "shell",
-      "command": "bash scripts/dev-up.sh",
-      "presentation": { "reveal": "silent", "panel": "dedicated" },
-      "problemMatcher": []
-    },
-    {
-      "label": "Control Center: restart",
-      "type": "shell",
-      "command": "bash scripts/dev-restart.sh",
-      "problemMatcher": []
-    }
-  ]
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Control Center: start",
+			"type": "shell",
+			"command": "bash scripts/dev-up.sh",
+			"presentation": {
+				"reveal": "silent",
+				"panel": "dedicated"
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "Control Center: restart",
+			"type": "shell",
+			"command": "bash scripts/dev-restart.sh",
+			"problemMatcher": []
+		},
+		{
+			"label": "Deploy current staging and editor",
+			"type": "shell",
+			"command": "bash",
+			"args": [
+				"-lc",
+				"set -euo pipefail\ncd /home/ubuntu/copilot-control-center\nprintf 'Host: '; hostname\nprintf 'Branch and revision: '; git branch --show-current; git rev-parse --short HEAD\n\ntest -f .env.staging || { echo 'Brak .env.staging — przerywam.'; exit 1; }\ntest -f .env.proxy || { echo 'Brak .env.proxy — przerywam.'; exit 1; }\ngrep -qx 'EDITOR_URL=https://editor.staging.copilotcontrolcenter.com/editor/' .env.staging || { if grep -q '^EDITOR_URL=' .env.staging; then echo 'EDITOR_URL ma inną wartość; przerywam bez zmian.'; exit 1; else printf '\\nEDITOR_URL=https://editor.staging.copilotcontrolcenter.com/editor/\\n' >> .env.staging; fi; }\ngrep -qx 'EDITOR_DOMAIN=editor.staging.copilotcontrolcenter.com' .env.proxy || { if grep -q '^EDITOR_DOMAIN=' .env.proxy; then echo 'EDITOR_DOMAIN ma inną wartość; przerywam bez zmian.'; exit 1; else printf '\\nEDITOR_DOMAIN=editor.staging.copilotcontrolcenter.com\\n' >> .env.proxy; fi; }\ngrep -qx 'CADDYFILE=./Caddyfile' .env.proxy || { echo 'Aktywny Caddyfile w .env.proxy nie wskazuje na ./Caddyfile; przerywam przed wdrożeniem.'; exit 1; }\nchmod 600 .env.staging .env.proxy\n\nprintf '\\nTworzenie backupu bazy staging...\\n'\nbash scripts/backup-postgres.sh staging\nprintf '\\nBudowanie aplikacji web...\\n'\n(cd mobile && flutter build web --release)\nprintf '\\nSprawdzanie sieci edytora...\\n'\nsudo docker network inspect ccc-editor-edge >/dev/null 2>&1 || sudo docker network create ccc-editor-edge\nprintf '\\nWdrażanie API i interfejsu staging...\\n'\nsudo env APP_ENV_FILE=.env.staging docker compose -p ccc-staging --env-file .env.staging up -d --build\nprintf '\\nUruchamianie izolowanego edytora...\\n'\nsudo docker compose -f docker-compose.editor.yml -p ccc-staging-editor --env-file .env.staging up -d --build\nprintf '\\nOdtwarzanie proxy z routingiem dla edytora...\\n'\nsudo env PROXY_ENV_FILE=.env.proxy docker compose -f docker-compose.proxy.yml -p ccc-proxy --env-file .env.proxy up -d --force-recreate caddy\nprintf '\\nWeryfikacja kontenerów...\\n'\nsudo docker ps --format 'table {{.Names}}\\t{{.Status}}\\t{{.Ports}}'\nprintf '\\nTest HTTPS stagingu...\\n'\ncurl -sS -o /dev/null -w 'Staging HTTP %{http_code}\\n' --max-time 15 https://staging.copilotcontrolcenter.com/\nprintf '\\nTest HTTPS edytora (401 bez sesji jest oczekiwane)...\\n'\ncurl -skI --connect-timeout 10 --max-time 15 https://editor.staging.copilotcontrolcenter.com/editor/"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Deploy staging and editor",
+			"type": "shell",
+			"command": "bash",
+			"args": [
+				"-lc",
+				"set -euo pipefail\ncd /home/ubuntu/copilot-control-center\necho Host:; hostname\necho Branch:; git branch --show-current\ngit rev-parse --short HEAD\n\ntest -f .env.staging || { echo Missing-staging-env; exit 1; }\ntest -f .env.proxy || { echo Missing-proxy-env; exit 1; }\ngrep -qx EDITOR_URL=https://editor.staging.copilotcontrolcenter.com/editor/ .env.staging || { if grep -q ^EDITOR_URL= .env.staging; then echo Editor-URL-mismatch; exit 1; else printf \"\\nEDITOR_URL=https://editor.staging.copilotcontrolcenter.com/editor/\\n\" >> .env.staging; fi; }\ngrep -qx EDITOR_DOMAIN=editor.staging.copilotcontrolcenter.com .env.proxy || { if grep -q ^EDITOR_DOMAIN= .env.proxy; then echo Editor-domain-mismatch; exit 1; else printf \"\\nEDITOR_DOMAIN=editor.staging.copilotcontrolcenter.com\\n\" >> .env.proxy; fi; }\ngrep -qx CADDYFILE=./Caddyfile .env.proxy || { echo Active-Caddyfile-mismatch; exit 1; }\nchmod 600 .env.staging .env.proxy\n\necho Creating-staging-database-backup\nbash scripts/backup-postgres.sh staging\necho Building-Flutter-Web\ncd mobile\nflutter build web --release\ncd ..\necho Ensuring-editor-network\nsudo docker network inspect ccc-editor-edge >/dev/null 2>&1 || sudo docker network create ccc-editor-edge\necho Deploying-staging-api-and-ui\nsudo env APP_ENV_FILE=.env.staging docker compose -p ccc-staging --env-file .env.staging up -d --build\necho Starting-isolated-editor\nsudo docker compose -f docker-compose.editor.yml -p ccc-staging-editor --env-file .env.staging up -d --build\necho Recreating-Caddy-with-editor-routing\nsudo env PROXY_ENV_FILE=.env.proxy docker compose -f docker-compose.proxy.yml -p ccc-proxy --env-file .env.proxy up -d --force-recreate caddy\necho Checking-running-containers\nsudo docker ps\necho Checking-staging-HTTPS\ncurl -sSI --max-time 15 https://staging.copilotcontrolcenter.com/\necho Checking-editor-HTTPS-unauthenticated-401-is-expected\ncurl -skI --connect-timeout 10 --max-time 15 https://editor.staging.copilotcontrolcenter.com/editor/"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Deploy staging without backup",
+			"type": "shell",
+			"command": "bash",
+			"args": [
+				"-lc",
+				"set -euo pipefail\ncd /home/ubuntu/copilot-control-center\necho Host:; hostname\necho Branch:; git branch --show-current\ngit rev-parse --short HEAD\n\ntest -f .env.staging || { echo Missing-staging-env; exit 1; }\ntest -f .env.proxy || { echo Missing-proxy-env; exit 1; }\ngrep -qx EDITOR_URL=https://editor.staging.copilotcontrolcenter.com/editor/ .env.staging || { if grep -q ^EDITOR_URL= .env.staging; then echo Editor-URL-mismatch; exit 1; else printf \"\\nEDITOR_URL=https://editor.staging.copilotcontrolcenter.com/editor/\\n\" >> .env.staging; fi; }\ngrep -qx EDITOR_DOMAIN=editor.staging.copilotcontrolcenter.com .env.proxy || { if grep -q ^EDITOR_DOMAIN= .env.proxy; then echo Editor-domain-mismatch; exit 1; else printf \"\\nEDITOR_DOMAIN=editor.staging.copilotcontrolcenter.com\\n\" >> .env.proxy; fi; }\ngrep -qx CADDYFILE=./Caddyfile .env.proxy || { echo Active-Caddyfile-mismatch; exit 1; }\nchmod 600 .env.staging .env.proxy\n\necho Building-Flutter-Web\ncd mobile\nflutter build web --release\ncd ..\necho Ensuring-editor-network\nsudo docker network inspect ccc-editor-edge >/dev/null 2>&1 || sudo docker network create ccc-editor-edge\necho Deploying-staging-api-and-ui\nsudo env APP_ENV_FILE=.env.staging docker compose -p ccc-staging --env-file .env.staging up -d --build\necho Starting-isolated-editor\nsudo docker compose -f docker-compose.editor.yml -p ccc-staging-editor --env-file .env.staging up -d --build\necho Recreating-Caddy-with-editor-routing\nsudo env PROXY_ENV_FILE=.env.proxy docker compose -f docker-compose.proxy.yml -p ccc-proxy --env-file .env.proxy up -d --force-recreate caddy\necho Checking-running-containers\nsudo docker ps\necho Checking-staging-HTTPS\ncurl -sSI --max-time 15 https://staging.copilotcontrolcenter.com/\necho Checking-editor-HTTPS-unauthenticated-401-is-expected\ncurl -skI --connect-timeout 10 --max-time 15 https://editor.staging.copilotcontrolcenter.com/editor/"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Check staging deploy tools",
+			"type": "shell",
+			"command": "bash",
+			"args": [
+				"-lc",
+				"cd /home/ubuntu/copilot-control-center\nprintf 'Flutter in PATH: '; command -v flutter || true\nprintf 'Known Flutter path: '; test -x /home/ubuntu/.local/flutter/bin/flutter && echo available || echo missing\nprintf 'Docker: '; sudo docker ps --format '{{.Names}} {{.Status}}' 2>&1 | head -10\nprintf 'Environment files: '; test -f .env.staging && test -f .env.proxy && echo present || echo missing\nprintf 'Caddy env settings: '; grep -q '^CADDYFILE=./Caddyfile$' .env.proxy && echo default-Caddyfile || echo non-default-or-missing"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Deploy current staging now",
+			"type": "shell",
+			"command": "bash",
+			"args": [
+				"-lc",
+				"set -euo pipefail\ncd /home/ubuntu/copilot-control-center\necho Host; hostname\necho Revision; git rev-parse --short HEAD\ntest -f .env.staging\ntest -f .env.proxy\ngrep -qx EDITOR_URL=https://editor.staging.copilotcontrolcenter.com/editor/ .env.staging || { echo Editor-URL-missing-or-mismatch; exit 1; }\ngrep -qx EDITOR_DOMAIN=editor.staging.copilotcontrolcenter.com .env.proxy || { echo Editor-domain-missing-or-mismatch; exit 1; }\ngrep -qx CADDYFILE=./Caddyfile .env.proxy || { echo Caddyfile-is-not-default; exit 1; }\nif test -x /home/ubuntu/.local/flutter/bin/flutter; then FLUTTER=/home/ubuntu/.local/flutter/bin/flutter; elif command -v flutter >/dev/null 2>&1; then FLUTTER=flutter; else echo Flutter-not-installed; exit 1; fi\necho Building-Flutter-Web\ncd mobile\n\"$FLUTTER\" build web --release\ncd ..\necho Ensure-editor-network\nsudo docker network inspect ccc-editor-edge >/dev/null 2>&1 || sudo docker network create ccc-editor-edge\necho Deploy-staging-api-and-ui\nsudo env APP_ENV_FILE=.env.staging docker compose -p ccc-staging --env-file .env.staging up -d --build\necho Start-editor-container\nsudo docker compose -f docker-compose.editor.yml -p ccc-staging-editor --env-file .env.staging up -d --build\necho Recreate-Caddy\nsudo env PROXY_ENV_FILE=.env.proxy docker compose -f docker-compose.proxy.yml -p ccc-proxy --env-file .env.proxy up -d --force-recreate caddy\necho Containers\nsudo docker ps\necho Test-staging\ncurl -sSI --max-time 15 https://staging.copilotcontrolcenter.com/\necho Test-editor-unauthenticated\ncurl -skI --connect-timeout 10 --max-time 15 https://editor.staging.copilotcontrolcenter.com/editor/"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		}
+	]
 }

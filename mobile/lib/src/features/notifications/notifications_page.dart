@@ -47,7 +47,8 @@ class _NotificationRow extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final unread = notification['readAt'] == null;
-    final color = _color(notification['type']?.toString() ?? '');
+    final type = notification['type']?.toString() ?? '';
+    final color = _color(type);
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
       child: ListTile(
@@ -56,12 +57,20 @@ class _NotificationRow extends ConsumerWidget {
           child: Icon(_icon(notification['type']?.toString() ?? ''), color: color, size: 20),
         ),
         title: Row(children: [
-          Expanded(child: Text(notification['title']?.toString() ?? '', style: const TextStyle(fontWeight: FontWeight.w600))),
+          Expanded(
+            child: Text(
+              _title(type),
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+          ),
           if (unread) const Icon(Icons.circle, size: 8, color: AppColors.blue),
         ]),
         subtitle: Padding(
           padding: const EdgeInsets.only(top: 5),
-          child: Text(notification['body']?.toString() ?? '', style: const TextStyle(color: AppColors.muted)),
+          child: Text(
+            _body(type),
+            style: const TextStyle(color: AppColors.muted),
+          ),
         ),
         trailing: unread
             ? IconButton(
@@ -86,17 +95,48 @@ class _NotificationRow extends ConsumerWidget {
     );
   }
 
+  static String _title(String type) => switch (type.toUpperCase()) {
+        'COPILOT_TASK_STARTED' => 'Copilot rozpoczął zadanie',
+        'COPILOT_TASK_QUEUED' => 'Zadanie Copilot oczekuje w kolejce',
+        'COPILOT_TASK_IN_PROGRESS' => 'Copilot pracuje nad zadaniem',
+        'COPILOT_TASK_COMPLETED' => 'Copilot zakończył zadanie',
+        'COPILOT_TASK_FAILED' => 'Zadanie Copilot zakończyło się błędem',
+        'COPILOT_TASK_TIMED_OUT' => 'Przekroczono czas wykonywania zadania Copilot',
+        'COPILOT_TASK_CANCELLED' => 'Zadanie Copilot zostało anulowane',
+        'COPILOT_TASK_IDLE' => 'Zadanie Copilot jest bezczynne',
+        'COPILOT_TASK_WAITING_FOR_USER' => 'Copilot czeka na Twoje działanie',
+        _ => 'Powiadomienie',
+      };
+
+  static String _body(String type) => switch (type.toUpperCase()) {
+        'COPILOT_TASK_STARTED' =>
+          'GitHub przyjął zadanie do wykonania. Możesz sprawdzić jego status w szczegółach bota.',
+        'COPILOT_TASK_COMPLETED' =>
+          'Sprawdź wynik pracy i pull request przed zatwierdzeniem etapu.',
+        'COPILOT_TASK_FAILED' =>
+          'GitHub zgłosił błąd podczas wykonywania zadania. Sprawdź jego status i spróbuj ponownie.',
+        'COPILOT_TASK_TIMED_OUT' =>
+          'GitHub przekroczył limit czasu wykonywania zadania. Sprawdź jego status.',
+        'COPILOT_TASK_CANCELLED' => 'GitHub zgłosił anulowanie zadania.',
+        'COPILOT_TASK_WAITING_FOR_USER' =>
+          'GitHub czeka na Twoje działanie, zanim będzie mógł kontynuować.',
+        'COPILOT_TASK_QUEUED' => 'Zadanie czeka na rozpoczęcie przez GitHub.',
+        'COPILOT_TASK_IN_PROGRESS' => 'GitHub wykonuje zadanie.',
+        'COPILOT_TASK_IDLE' => 'GitHub zgłosił, że zadanie jest bezczynne.',
+        _ => 'Zarejestrowano nowe zdarzenie dotyczące zadania Copilot.',
+      };
+
   static Color _color(String type) => switch (type.toUpperCase()) {
-        'ERROR' || 'TESTS_FAILED' || 'BOT_ERROR' => AppColors.coral,
-        'APPROVAL' || 'WAITING_APPROVAL' || 'PR_READY' => AppColors.amber,
-        'SUCCESS' || 'STAGE_APPROVED' || 'PROJECT_COMPLETED' => AppColors.mint,
+        'ERROR' || 'TESTS_FAILED' || 'BOT_ERROR' || 'COPILOT_TASK_FAILED' || 'COPILOT_TASK_TIMED_OUT' => AppColors.coral,
+        'APPROVAL' || 'WAITING_APPROVAL' || 'PR_READY' || 'COPILOT_TASK_WAITING_FOR_USER' => AppColors.amber,
+        'SUCCESS' || 'STAGE_APPROVED' || 'PROJECT_COMPLETED' || 'COPILOT_TASK_COMPLETED' => AppColors.mint,
         _ => AppColors.blue,
       };
 
   static IconData _icon(String type) => switch (type.toUpperCase()) {
-        'ERROR' || 'TESTS_FAILED' || 'BOT_ERROR' => Icons.error_outline_rounded,
-        'APPROVAL' || 'WAITING_APPROVAL' || 'PR_READY' => Icons.hourglass_top_rounded,
-        'SUCCESS' || 'STAGE_APPROVED' || 'PROJECT_COMPLETED' => Icons.check_circle_outline_rounded,
+        'ERROR' || 'TESTS_FAILED' || 'BOT_ERROR' || 'COPILOT_TASK_FAILED' || 'COPILOT_TASK_TIMED_OUT' => Icons.error_outline_rounded,
+        'APPROVAL' || 'WAITING_APPROVAL' || 'PR_READY' || 'COPILOT_TASK_WAITING_FOR_USER' => Icons.hourglass_top_rounded,
+        'SUCCESS' || 'STAGE_APPROVED' || 'PROJECT_COMPLETED' || 'COPILOT_TASK_COMPLETED' => Icons.check_circle_outline_rounded,
         _ => Icons.notifications_none_rounded,
       };
 }

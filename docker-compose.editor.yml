@@ -1,0 +1,40 @@
+services:
+  editor:
+    build:
+      context: .
+      dockerfile: Dockerfile.editor
+    restart: unless-stopped
+    init: true
+    user: "1000:1000"
+    expose:
+      - "8080"
+    volumes:
+      - editor_workspace:/home/coder/project
+      - editor_data:/home/coder/.local/share/code-server
+    networks:
+      editor_edge:
+        aliases:
+          - control-center-staging-editor
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid
+      - /home/coder/.config:size=16m,noexec,nosuid,uid=1000,gid=1000
+      - /home/coder/.cache:size=32m,noexec,nosuid,uid=1000,gid=1000
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+
+volumes:
+  editor_workspace:
+  editor_data:
+
+networks:
+  editor_edge:
+    name: ccc-editor-edge
+    external: true

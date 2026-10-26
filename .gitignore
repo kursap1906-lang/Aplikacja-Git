@@ -1,13 +1,16 @@
 node_modules/
 dist/
 coverage/
+__pycache__/
 src/generated/prisma/
 .env
 .env.*
 !.env.example
 !.env.production.example
 !.env.staging.example
+!.env.proxy.example
 .run/
 .run-start.log
+backups/
 mobile/**/build/
 *.log
