@@ -9,7 +9,8 @@
   "scripts": {
     "dev": "node --experimental-strip-types --watch src/server.ts",
     "start": "node --experimental-strip-types src/server.ts",
-    "test": "node --experimental-strip-types --test src/app.test.ts src/github/copilot-provider.test.ts src/projects/project-scanner.test.ts src/security/passwords.test.ts src/security/secrets.test.ts src/stages/stage-machine.test.ts",
+    "test": "node --experimental-strip-types --test src/app.test.ts src/ai/openai.test.ts src/ai/team-analysis.test.ts src/github/copilot-provider.test.ts src/projects/project-scanner.test.ts src/security/passwords.test.ts src/security/secrets.test.ts src/stages/stage-machine.test.ts src/workspace/hierarchy.test.ts",
+    "test:workspace": "node --experimental-strip-types --test src/workspace/workspace.integration.test.ts src/ai/budget.integration.test.ts sdk-worker/src/metadata.integration.test.ts",
     "db:generate": "prisma generate",
     "db:validate": "prisma validate",
     "db:migrate": "prisma migrate deploy"

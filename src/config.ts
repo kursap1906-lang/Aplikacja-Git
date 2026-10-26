@@ -12,7 +12,13 @@ const configSchema = z.object({
   GITHUB_CLIENT_SECRET: z.string().min(1).optional(),
   GITHUB_WEBHOOK_SECRET: z.string().min(32).optional(),
   APP_ENCRYPTION_KEY: z.string().optional(),
+  OPENAI_API_KEY: z.string().trim().min(1).optional(),
+  OPENAI_ANALYSIS_ENABLED: z.enum(['true', 'false']).default('false').transform((value) => value === 'true'),
+  SDK_METADATA_ENABLED: z.enum(['true', 'false']).default('false').transform((value) => value === 'true'),
 }).superRefine((config, context) => {
+  if (config.OPENAI_ANALYSIS_ENABLED && !config.OPENAI_API_KEY) {
+    context.addIssue({ code: 'custom', path: ['OPENAI_API_KEY'], message: 'Enabled OpenAI analysis requires an API key.' });
+  }
   if (!config.EDITOR_URL || config.NODE_ENV !== 'production') {
     return;
   }

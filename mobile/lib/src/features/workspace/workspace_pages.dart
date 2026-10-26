@@ -2137,18 +2137,24 @@ class _SchedulePageState extends ConsumerState<SchedulePage> {
 
   Future<void> _save() async {
     try {
-      await ref.read(apiClientProvider).request(
-        '/schedule',
-        method: 'POST',
-        data: {
-          'enabled': _enabled,
-          'timezone': _timezone.text.trim(),
-          'windows': [
-            for (final day in _selected.toList()..sort())
-              {'day': day, 'start': _start.text.trim(), 'end': _end.text.trim()},
-          ],
-        },
-      );
+      await ref
+          .read(apiClientProvider)
+          .request(
+            '/schedule',
+            method: 'POST',
+            data: {
+              'enabled': _enabled,
+              'timezone': _timezone.text.trim(),
+              'windows': [
+                for (final day in _selected.toList()..sort())
+                  {
+                    'day': day,
+                    'start': _start.text.trim(),
+                    'end': _end.text.trim(),
+                  },
+              ],
+            },
+          );
       ref.invalidate(scheduleProvider);
       if (!mounted) return;
       ScaffoldMessenger.of(context)
@@ -2156,7 +2162,10 @@ class _SchedulePageState extends ConsumerState<SchedulePage> {
     } on Object catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(error.toString()), backgroundColor: AppColors.coral),
+        SnackBar(
+          content: Text(error.toString()),
+          backgroundColor: AppColors.coral,
+        ),
       );
     }
   }
@@ -2192,7 +2201,9 @@ class _SchedulePageState extends ConsumerState<SchedulePage> {
                     ),
                     TextField(
                       controller: _timezone,
-                      decoration: const InputDecoration(labelText: 'Strefa czasowa (IANA)'),
+                      decoration: const InputDecoration(
+                        labelText: 'Strefa czasowa (IANA)',
+                      ),
                     ),
                     const SizedBox(height: 12),
                     Wrap(
@@ -2213,20 +2224,27 @@ class _SchedulePageState extends ConsumerState<SchedulePage> {
                         Expanded(
                           child: TextField(
                             controller: _start,
-                            decoration: const InputDecoration(labelText: 'Od (HH:MM)'),
+                            decoration: const InputDecoration(
+                              labelText: 'Od (HH:MM)',
+                            ),
                           ),
                         ),
                         const SizedBox(width: 12),
                         Expanded(
                           child: TextField(
                             controller: _end,
-                            decoration: const InputDecoration(labelText: 'Do (HH:MM)'),
+                            decoration: const InputDecoration(
+                              labelText: 'Do (HH:MM)',
+                            ),
                           ),
                         ),
                       ],
                     ),
                     const SizedBox(height: 16),
-                    FilledButton(onPressed: _save, child: const Text('Zapisz harmonogram')),
+                    FilledButton(
+                      onPressed: _save,
+                      child: const Text('Zapisz harmonogram'),
+                    ),
                   ],
                 ),
               ),
@@ -2268,11 +2286,15 @@ class _CostsPageState extends ConsumerState<CostsPage> {
       await action();
       ref.invalidate(costsProvider);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(message)));
     } on Object catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(error.toString()), backgroundColor: AppColors.coral),
+        SnackBar(
+          content: Text(error.toString()),
+          backgroundColor: AppColors.coral,
+        ),
       );
     }
   }
@@ -2301,13 +2323,16 @@ class _CostsPageState extends ConsumerState<CostsPage> {
             if (!_loaded) {
               _loaded = true;
               if (budget != null) {
-                _limit.text = ((budget['monthlyLimitMinor'] as int) / 100).toStringAsFixed(2);
+                _limit.text = ((budget['monthlyLimitMinor'] as int) / 100)
+                    .toStringAsFixed(2);
                 _currency.text = budget['currency'].toString();
                 _enforce = budget['enforce'] == true;
               }
             }
-            final month = (value['month'] as List? ?? const []).whereType<Map>();
-            final entries = (value['entries'] as List? ?? const []).whereType<Map>();
+            final month = (value['month'] as List? ?? const [])
+                .whereType<Map>();
+            final entries = (value['entries'] as List? ?? const [])
+                .whereType<Map>();
             return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -2317,7 +2342,10 @@ class _CostsPageState extends ConsumerState<CostsPage> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('Bieżący miesiąc', style: Theme.of(context).textTheme.titleMedium),
+                        Text(
+                          'Bieżący miesiąc',
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
                         if (month.isEmpty) const Text('Brak wpisów.'),
                         for (final row in month)
                           Text(
@@ -2333,7 +2361,10 @@ class _CostsPageState extends ConsumerState<CostsPage> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('Limit miesięczny zużycia', style: Theme.of(context).textTheme.titleMedium),
+                        Text(
+                          'Limit miesięczny zużycia',
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
                         TextField(
                           controller: _limit,
                           keyboardType: TextInputType.number,
@@ -2341,29 +2372,35 @@ class _CostsPageState extends ConsumerState<CostsPage> {
                         ),
                         TextField(
                           controller: _currency,
-                          decoration: const InputDecoration(labelText: 'Waluta (3 litery)'),
+                          decoration: const InputDecoration(
+                            labelText: 'Waluta (3 litery)',
+                          ),
                         ),
                         SwitchListTile(
-                          title: const Text('Blokuj start etapów po przekroczeniu'),
+                          title: const Text(
+                            'Blokuj start etapów po przekroczeniu',
+                          ),
                           value: _enforce,
                           onChanged: (on) => setState(() => _enforce = on),
                         ),
                         FilledButton(
-                          onPressed: () => _run(
-                            () async {
-                              await ref.read(apiClientProvider).request(
-                                '/costs/budget',
-                                method: 'POST',
-                                data: {
-                                  'monthlyLimitMinor':
-                                      ((double.tryParse(_limit.text.trim()) ?? 0) * 100).round(),
-                                  'currency': _currency.text.trim(),
-                                  'enforce': _enforce,
-                                },
-                              );
-                            },
-                            'Limit zapisany.',
-                          ),
+                          onPressed: () => _run(() async {
+                            await ref
+                                .read(apiClientProvider)
+                                .request(
+                                  '/costs/budget',
+                                  method: 'POST',
+                                  data: {
+                                    'monthlyLimitMinor':
+                                        ((double.tryParse(_limit.text.trim()) ??
+                                                    0) *
+                                                100)
+                                            .round(),
+                                    'currency': _currency.text.trim(),
+                                    'enforce': _enforce,
+                                  },
+                                );
+                          }, 'Limit zapisany.'),
                           child: const Text('Zapisz limit'),
                         ),
                       ],
@@ -2376,26 +2413,32 @@ class _CostsPageState extends ConsumerState<CostsPage> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('Import CSV', style: Theme.of(context).textTheme.titleMedium),
-                        const Text('Nagłówek: date,category,amount,currency,description (category: USAGE lub SUBSCRIPTION).'),
+                        Text(
+                          'Import CSV',
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                        const Text(
+                          'Nagłówek: date,category,amount,currency,description (category: USAGE lub SUBSCRIPTION).',
+                        ),
                         TextField(
                           controller: _csv,
                           minLines: 3,
                           maxLines: 8,
-                          decoration: const InputDecoration(labelText: 'Zawartość CSV'),
+                          decoration: const InputDecoration(
+                            labelText: 'Zawartość CSV',
+                          ),
                         ),
                         FilledButton(
-                          onPressed: () => _run(
-                            () async {
-                              await ref.read(apiClientProvider).request(
-                                '/costs/import',
-                                method: 'POST',
-                                data: {'csv': _csv.text},
-                              );
-                              _csv.clear();
-                            },
-                            'Zaimportowano wpisy.',
-                          ),
+                          onPressed: () => _run(() async {
+                            await ref
+                                .read(apiClientProvider)
+                                .request(
+                                  '/costs/import',
+                                  method: 'POST',
+                                  data: {'csv': _csv.text},
+                                );
+                            _csv.clear();
+                          }, 'Zaimportowano wpisy.'),
                           child: const Text('Importuj'),
                         ),
                       ],
@@ -2405,8 +2448,15 @@ class _CostsPageState extends ConsumerState<CostsPage> {
                 for (final entry in entries)
                   ListTile(
                     title: Text(entry['description'].toString()),
-                    subtitle: Text('${entry['occurredOn']} · ${entry['category']}'),
-                    trailing: Text(_money(entry['amountMinor'] as int, entry['currency'].toString())),
+                    subtitle: Text(
+                      '${entry['occurredOn']} · ${entry['category']}',
+                    ),
+                    trailing: Text(
+                      _money(
+                        entry['amountMinor'] as int,
+                        entry['currency'].toString(),
+                      ),
+                    ),
                   ),
               ],
             );

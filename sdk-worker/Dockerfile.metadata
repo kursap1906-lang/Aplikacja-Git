@@ -1,0 +1,14 @@
+ARG APP_IMAGE_TAG=local
+FROM copilot-control-center:${APP_IMAGE_TAG}
+
+USER root
+RUN mkdir -p /app/sdk-worker && chown node:node /app/sdk-worker
+USER node
+WORKDIR /app/sdk-worker
+COPY --chown=node:node sdk-worker/package.json sdk-worker/package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts
+COPY --chown=node:node sdk-worker/src ./src
+
+HEALTHCHECK --interval=20s --timeout=5s --start-period=20s --retries=3 \
+  CMD node -e "try { const {statSync}=require('node:fs'); process.exit(Date.now()-statSync('/tmp/ccc-sdk-metadata-heartbeat').mtimeMs<150000?0:1); } catch { process.exit(1); }"
+CMD ["node", "src/metadata-worker.ts"]

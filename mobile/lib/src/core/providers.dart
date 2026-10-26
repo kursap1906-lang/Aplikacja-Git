@@ -3,12 +3,20 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'api.dart';
 
 final sessionProvider = FutureProvider<bool>((ref) async {
-  final token = await ref.watch(apiClientProvider).currentSession();
-  return token != null;
-});
+  final api = ref.watch(apiClientProvider);
+  try {
+    await api.loadSession();
+    return true;
+  } on ApiException catch (error) {
+    if (error.code != 'UNAUTHENTICATED') rethrow;
+    await api.forgetSession();
+    return false;
+  }
+}, retry: (retryCount, error) => null);
 
 final sessionDataProvider = FutureProvider<Map<String, dynamic>>(
-  (ref) => ref.watch(apiClientProvider).request('/session'),
+  (ref) => ref.watch(apiClientProvider).loadSession(),
+  retry: (retryCount, error) => null,
 );
 
 final botsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {

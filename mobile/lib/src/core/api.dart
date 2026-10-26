@@ -83,6 +83,46 @@ const _apiErrorMessages = <String, String>{
       'Etap zmienił status. Odśwież widok i spróbuj ponownie.',
   'STAGE_NOT_FOUND': 'Nie znaleziono etapu.',
   'UNAUTHENTICATED': 'Zaloguj się, aby kontynuować.',
+  'ATTACHMENT_TARGET_UNAVAILABLE':
+      'Nie można teraz zmienić tych załączników. Odśwież widok.',
+  'ATTACHMENTS_TOO_LARGE':
+      'Łączny rozmiar załączników nie może przekroczyć 30 MB.',
+  'BOT_DEFINITION_NAME_EXISTS': 'Bot o tej nazwie już istnieje.',
+  'BOT_DEFINITION_NOT_FOUND': 'Nie znaleziono definicji bota.',
+  'BOT_NOT_IN_TEAM': 'Przypisz zadanie botowi z tego zespołu.',
+  'FILE_NOT_FOUND': 'Nie znaleziono pliku.',
+  'FILE_REQUIRED': 'Wybierz niepusty plik.',
+  'FILE_TOO_LARGE': 'Maksymalny rozmiar pliku to 10 MB.',
+  'GITHUB_RATE_LIMITED': 'GitHub ograniczył liczbę żądań. Spróbuj później.',
+  'GITHUB_REPOSITORY_FORBIDDEN':
+      'Wybrane konto GitHub nie ma dostępu do repozytorium.',
+  'INVALID_TEAM_HIERARCHY': 'Przełożony musi należeć do tego samego zespołu.',
+  'PROJECT_CHANGED': 'Projekt się zmienił. Odśwież formularz.',
+  'PROJECT_REPOSITORY_CHANGED':
+      'Repozytorium GitHub różni się od zapisanego w projekcie.',
+  'PROJECT_REPOSITORY_LOCKED':
+      'Nie można zmienić repozytorium projektu z przypisanymi zespołami.',
+  'REVISION_INSTRUCTIONS_REQUIRED': 'Opisz, co zespół ma poprawić.',
+  'SDK_RUNTIME_REQUIRED':
+      'Sesja Copilot SDK nie jest jeszcze gotowa. Bot nie został uruchomiony.',
+  'SDK_COST_POLICY_CHANGED':
+      'Limit zmienił się w innym oknie. Wczytaj zapisany limit przed ponowną edycją.',
+  'SDK_METADATA_UNAVAILABLE':
+      'Odczyt kredytów GitHub Copilot nie jest jeszcze dostępny. Spróbuj ponownie później.',
+  'TASK_HAS_DEPENDENTS':
+      'Inne zadania zależą od tego zadania. Najpierw zmień ich zależności.',
+  'TASK_NOT_FOUND': 'Nie znaleziono zadania.',
+  'TEAM_CHANGED': 'Zespół się zmienił. Odśwież widok.',
+  'TEAM_HIERARCHY_CYCLE': 'Hierarchia współpracy nie może zawierać cyklu.',
+  'TEAM_INSTANCES_REQUIRED': 'Ten zespół wymaga osobnych instancji botów.',
+  'TEAM_MEMBERS_CHANGED': 'Członkowie zespołu się zmienili. Odśwież widok.',
+  'TEAM_NOT_FOUND': 'Nie znaleziono zespołu.',
+  'TEAM_PROJECT_REQUIRED': 'Najpierw przypisz zespół do projektu.',
+  'TEAM_MEMBER_LIMIT': 'Zespół może mieć maksymalnie 20 botów.',
+  'BOT_NOT_IDLE': 'Najpierw zakończ sesję bota.',
+  'BOT_HAS_TASKS': 'Najpierw przypisz zadania innemu botowi lub je usuń.',
+  'BOT_ALREADY_IN_TEAM': 'Ta rola jest już w zespole.',
+  'TEAM_BOT_NOT_FOUND': 'Nie znaleziono członka zespołu.',
 };
 
 final apiClientProvider = Provider<ApiClient>((ref) => ApiClient());
@@ -146,6 +186,21 @@ class ApiClient {
       data: {'email': email, 'password': password},
     );
     await _storeSession(response);
+  }
+
+  Future<Map<String, dynamic>> loadSession() async {
+    final response = await request('/session', withCredentials: true);
+    final user = response['user'];
+    if (user is! Map ||
+        user['id'] is! String ||
+        (user['id'] as String).isEmpty ||
+        response['githubAccounts'] is! List) {
+      throw const ApiException(
+        'INVALID_SESSION_RESPONSE',
+        'Serwer zwrócił nieprawidłowe dane sesji.',
+      );
+    }
+    return response;
   }
 
   Future<Map<String, dynamic>> createProject({
@@ -328,6 +383,80 @@ class ApiClient {
     await request('/documents/$documentId', method: 'DELETE');
   }
 
+  Future<Map<String, dynamic>> uploadWorkspaceFile({
+    required String collection,
+    required String ownerId,
+    required String filename,
+    required Uint8List bytes,
+  }) async {
+    if (!const {'projects', 'messages', 'revisions'}.contains(collection)) {
+      throw ArgumentError.value(
+        collection,
+        'collection',
+        'Unknown file collection',
+      );
+    }
+    if (bytes.isEmpty) {
+      throw const ApiException('FILE_REQUIRED', 'Wybierz niepusty plik.');
+    }
+    if (bytes.length > 10 * 1024 * 1024) {
+      throw const ApiException(
+        'FILE_TOO_LARGE',
+        'Wybierz niepusty plik o rozmiarze do 10 MB.',
+      );
+    }
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/workspace/$collection/${Uri.encodeComponent(ownerId)}/files',
+        queryParameters: {'filename': filename},
+        data: bytes,
+        options: Options(contentType: 'application/octet-stream'),
+      );
+      final result = response.data;
+      if (result == null || result['file'] is! Map<String, dynamic>) {
+        throw const ApiException(
+          'INVALID_FILE_RESPONSE',
+          'Serwer nie potwierdził zapisu pliku.',
+        );
+      }
+      return result;
+    } on DioException catch (error) {
+      throw _apiExceptionFromDio(error);
+    }
+  }
+
+  Future<Uint8List> downloadWorkspaceFile(String fileId) async {
+    try {
+      final response = await _dio.get<List<int>>(
+        '/workspace/files/${Uri.encodeComponent(fileId)}/download',
+        options: Options(responseType: ResponseType.bytes),
+      );
+      final bytes = response.data;
+      if (bytes == null || bytes.isEmpty) {
+        throw const ApiException('EMPTY_FILE', 'Serwer zwrócił pusty plik.');
+      }
+      return Uint8List.fromList(bytes);
+    } on DioException catch (error) {
+      throw _apiExceptionFromDio(error);
+    }
+  }
+
+  Future<void> deleteWorkspaceFile(String fileId) async {
+    try {
+      final response = await _dio.delete<Object?>(
+        '/workspace/files/${Uri.encodeComponent(fileId)}',
+      );
+      if (response.statusCode != 204) {
+        throw const ApiException(
+          'INVALID_FILE_RESPONSE',
+          'Serwer nie potwierdził usunięcia pliku.',
+        );
+      }
+    } on DioException catch (error) {
+      throw _apiExceptionFromDio(error);
+    }
+  }
+
   Future<void> _storeSession(Map<String, dynamic> response) async {
     final session = response['sessionToken'];
     final csrf = response['csrfToken'];
@@ -427,6 +556,15 @@ class ApiClient {
     await _storage.delete(key: _sessionKey);
     await _storage.delete(key: _csrfKey);
     await _storage.delete(key: _oauthStateKey);
+  }
+
+  Future<void> signOut() async {
+    try {
+      await request('/auth/logout', method: 'POST', withCredentials: true);
+    } on ApiException catch (error) {
+      if (error.code != 'UNAUTHENTICATED') rethrow;
+    }
+    await forgetSession();
   }
 
   Future<String?> currentSession() => _storage.read(key: _sessionKey);

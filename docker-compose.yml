@@ -67,6 +67,44 @@ services:
         max-size: 10m
         max-file: "5"
 
+  sdk-metadata:
+    profiles: ["sdk"]
+    image: copilot-control-center-sdk-metadata:${APP_IMAGE_TAG:-local}
+    build:
+      context: .
+      dockerfile: sdk-worker/Dockerfile.metadata
+      args:
+        APP_IMAGE_TAG: ${APP_IMAGE_TAG:-local}
+    restart: unless-stopped
+    stop_grace_period: 30s
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@database:5432/${POSTGRES_DB}?schema=public
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:-}
+    depends_on:
+      database:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - data
+      - edge
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,nosuid,nodev,uid=1000,gid=1000,mode=0700
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 384m
+    memswap_limit: 384m
+    cpus: 0.5
+    pids_limit: 128
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+
   migrate:
     image: copilot-control-center-migrate:${APP_IMAGE_TAG:-local}
     build:

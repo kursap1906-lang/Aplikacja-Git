@@ -2,6 +2,33 @@
 
 Statusy: `DONE`, `IN_PROGRESS`, `BLOCKED`, `TODO`. Zadania oznaczamy jako wykonane wyłącznie po przeprowadzeniu opisanej weryfikacji.
 
+## Bieżący przyrost — staging live, 2026-10-26
+
+Poniższy status jest aktualny. Dalsze fazy zachowują historyczny plan;
+ich stare informacje o niewdrożonym stagingu nie są już aktualne.
+
+- [DONE] Ustawić uwierzytelniony panel API jako stronę główną; demo tylko
+  pod `/demo`. Dodać regresje wejścia i braku danych demonstracyjnych.
+- [DONE] Zweryfikować 73 testy backendu, 10 SDK, 4 integracje PostgreSQL
+  i 123 Fluttera; typecheck obu pakietów i Prisma. Release Web przechodzi.
+  Pozostaje 6 istniejących informacji analizatora Fluttera.
+- [DONE] Świeży backup i izolowany test restore przed migracją TaskRun.
+- [DONE] Wdrożyć `staging-live-20261026-2050`, wszystkie 12 migracji,
+  API/Web i worker metadanych; sprawdzić health i hash publicznego bundla.
+- [DONE] Publiczny smoke HTTPS: rejestracja/sesja, trwała rola po ponownym
+  logowaniu, unieważnienie sesji, seed-free workspace. Dane testowe usunięte.
+- [IN_PROGRESS] Model i API uruchomień TaskRun przygotowane. Start jawnie
+  zablokowany do czasu wdrożenia wykonawcy, bez pozornej kolejki.
+- [TODO] Wykonawca SDK, sandboxy, kontrolowana instalacja zależności,
+  niezależne testy wygenerowanego kodu i UI logów/diffu/review.
+- [TODO] Pełne E2E tworzenia aplikacji Node/Express przez bota, osobna
+  akceptacja pusha/PR, CI dla SHA i izolowane preview.
+- [TODO] Sterowanie sesjami przez harmonogram oraz test obciążenia/izolacji
+  pięciu równoległych botów na odpowiednio większym VPS.
+- [BLOCKED] Push Git wymaga poświadczeń z prawem zapisu na serwerze.
+
+## Historyczny plan faz
+
 ## Faza 1 — Analiza wymagań i repozytorium
 
 - [DONE] Sprawdzić strukturę, historię, stan Git i lokalnie dostępne narzędzia.

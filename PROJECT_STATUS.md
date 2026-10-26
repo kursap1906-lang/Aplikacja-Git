@@ -2,6 +2,50 @@
 
 Ostatnia aktualizacja: 2026-10-26
 
+## Aktualny stan stagingu — wydanie `staging-live-20261026-2050`
+
+Ta sekcja zastępuje starsze opisy wdrożenia i ograniczeń poniżej; pozostałe
+sekcje są historią prac, nie bieżącym raportem.
+
+- Strona główna `https://staging.copilotcontrolcenter.com/` otwiera teraz
+  uwierzytelniony panel `/workspace`, nie demo. Demo pozostało wyłącznie pod
+  `/demo`. Potwierdzono w przeglądarce logowanie i panel danych z API.
+- Wdrożono aktualne pliki z VPS: nowe UI, role/instancje botów, współdzielone
+  projekty, zespoły, zadania, materiały/PDF, hierarchię, zapis harmonogramów,
+  analizę OpenAI i koszty/metadane kont. Nie są to dane demonstracyjne.
+- Kontenery API, PostgreSQL i sdk-metadata są zdrowe; publiczne
+  `/health/ready` zwraca HTTP 200 z połączeniem bazy. SHA-256 publicznego
+  `main.dart.js` jest identyczne z lokalnym nowym buildem.
+- Świeży backup `backups/staging/postgres-20261026T204236.999569752Z.dump`
+  sprawdzono przez odtworzenie do izolowanej bazy
+  `ccc_restore_20261026204446` (11 migracji przed wdrożeniem).
+  Następnie na stagingu zastosowano dwunastą migrację, z modelem TaskRun.
+- Walidacja: 73/73 testy backendu, 10/10 testów SDK, 4/4 integracyjne
+  scenariusze na jednorazowym PostgreSQL z kompletem 12 migracji oraz
+  123/123 testy Fluttera. TypeScript obu pakietów i Prisma przechodzą.
+  Flutter analyze zgłasza 6 istniejących informacji lint/deprecation
+  (bez błędów i ostrzeżeń); analiza z `--no-fatal-infos` i release Web
+  przechodzą. Nie deklarujemy całkowicie czystego lintowania.
+- Publiczny smoke HTTPS potwierdził rejestrację, sesję, zapis własnej roli,
+  jej trwałość po wylogowaniu/logowaniu i unieważnienie starej sesji.
+  Konto testowe oraz jego dane usunięto. Nie wykonywano płatnej analizy.
+- Model i API TaskRun są fundamentem, nie gotowym wykonawcą.
+  `workspace.sdkExecution=false`; start zwraca jawne
+  `503 SDK_EXECUTION_UNAVAILABLE` bez wpisu do nieobsługiwanej kolejki.
+  Brakuje wykonawcy SDK, UI przeglądu uruchomienia, instalatora zależności,
+  izolowanego CI/preview oraz testu „bot tworzy aplikację → testy → push/PR”.
+  Harmonogramy nie sterują jeszcze automatycznie sesjami.
+- Host ma 2 vCPU, 4 GB RAM i 38 GB dysku; nie nadaje się do pięciu
+  równoległych buildów. Tymczasowy swap buildowy usunięto po wdrożeniu.
+  Wybrane stare, nieaktywne tagi obrazów usunięto; bezpośrednio poprzednie
+  wydanie `staging-sdk-costs-20261026-r2` zachowano do rollbacku.
+  Zalecenia zasobów i kryteria pełnego E2E są w README.
+- GitHub: próba zapisu bez interakcji jest blokowana brakiem poświadczeń Git.
+  Samo połączenie konta GitHub w aplikacji nie konfiguruje autoryzacji Git
+  użytkownika SSH. Produkcji nie zmieniano.
+
+## Historia przyrostów
+
 ## Przyrost 2026-10-26 — projekty, skanowanie, zespoły i współpraca
 
 - Dodano lokalną implementację projektów oraz wersjonowanych dokumentów PDF:

@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../core/api.dart';
 import '../../core/providers.dart';
 import '../../theme.dart';
+import '../workspace/workspace_data.dart';
 
 class AccountsPage extends ConsumerStatefulWidget {
   const AccountsPage({super.key});
@@ -25,10 +26,14 @@ class _AccountsPageState extends ConsumerState<AccountsPage> {
     });
     try {
       final address = await ref.read(apiClientProvider).beginGitHubSignIn(nativeClient: !kIsWeb);
-      if (!await launchUrl(Uri.parse(address), mode: LaunchMode.externalApplication)) {
+      if (!await launchUrl(
+        Uri.parse(address),
+        mode: kIsWeb ? LaunchMode.platformDefault : LaunchMode.externalApplication,
+        webOnlyWindowName: kIsWeb ? '_self' : null,
+      )) {
         throw const ApiException('BROWSER_UNAVAILABLE', 'Nie można otworzyć przeglądarki systemowej.');
       }
-    } on Object catch (error) {
+    } on Exception catch (error) {
       if (mounted) setState(() => _error = error.toString());
     } finally {
       if (mounted) setState(() => _connecting = false);
@@ -67,10 +72,13 @@ class _AccountsPageState extends ConsumerState<AccountsPage> {
           loading: () => const SliverToBoxAdapter(child: LinearProgressIndicator()),
           error: (error, stack) => SliverToBoxAdapter(child: Text(error.toString())),
           data: (response) {
-            final accounts = response['githubAccounts'];
-            final values = accounts is List
-                ? accounts.whereType<Map>().map((item) => Map<String, dynamic>.from(item)).toList()
-                : <Map<String, dynamic>>[];
+            final List<WorkspaceAccount> values;
+            try {
+              values = parseWorkspaceAccounts(response);
+            } on ApiException catch (error) {
+              return SliverToBoxAdapter(child: Text(error.toString(),
+                  style: const TextStyle(color: AppColors.coral)));
+            }
             if (values.isEmpty) {
               return SliverToBoxAdapter(child: Card(child: Padding(
                 padding: const EdgeInsets.all(22),
@@ -89,7 +97,7 @@ class _AccountsPageState extends ConsumerState<AccountsPage> {
               itemCount: values.length,
               itemBuilder: (context, index) {
                 final account = values[index];
-                final active = account['status'] == 'ACTIVE';
+                final active = account.active;
                 return Card(
                   child: ListTile(
                     contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
@@ -97,10 +105,10 @@ class _AccountsPageState extends ConsumerState<AccountsPage> {
                       backgroundColor: active ? AppColors.mint.withValues(alpha: .1) : AppColors.amber.withValues(alpha: .1),
                       child: Icon(Icons.code_rounded, color: active ? AppColors.mint : AppColors.amber),
                     ),
-                    title: Text('@${account['login'] ?? 'GitHub'}', style: const TextStyle(fontWeight: FontWeight.w600)),
+                    title: Text('@${account.login}', style: const TextStyle(fontWeight: FontWeight.w600)),
                     subtitle: Padding(
                       padding: const EdgeInsets.only(top: 4),
-                      child: Text('${active ? 'Połączone' : 'Wymaga ponownej autoryzacji'} · zakres: ${(account['scopes'] as List?)?.join(', ') ?? 'brak'}',
+                      child: Text('${active ? 'Połączone' : 'Wymaga ponownej autoryzacji'} · zakres: ${account.scopes.isEmpty ? 'brak' : account.scopes.join(', ')}',
                           style: const TextStyle(color: AppColors.muted)),
                     ),
                     trailing: active

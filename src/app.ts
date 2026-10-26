@@ -24,6 +24,13 @@ import { dummyPasswordHash, hashPassword, verifyPassword } from './security/pass
 import { isValidTimezone, isWithinWorkWindows, parseCostCsv } from './planning/planning.ts';
 import { StageTransitionError, transitionStage, type StageSnapshot } from './stages/stage-machine.ts';
 import { ProjectScannerError, scanGitHubProject } from './projects/project-scanner.ts';
+import { ApiError, isUniqueConstraintError, parseRequest } from './http/errors.ts';
+import { registerWorkspaceRoutes } from './workspace/routes.ts';
+import { registerTaskRunRoutes } from './workspace/runs.ts';
+import { verifyRepositoryAccess } from './github/repository-access.ts';
+import { registerAnalysisRoutes } from './ai/routes.ts';
+import { attachAnalysisWorker } from './ai/worker.ts';
+import { registerWorkspaceCostRoutes } from './workspace/costs.ts';
 
 const SESSION_COOKIE = 'ccc_session';
 const CSRF_COOKIE = 'ccc_csrf';
@@ -218,22 +225,6 @@ declare module 'fastify' {
   }
 }
 
-class ApiError extends Error {
-  readonly statusCode: number;
-  readonly code: string;
-
-  constructor(
-    statusCode: number,
-    code: string,
-    message: string,
-  ) {
-    super(message);
-    this.name = 'ApiError';
-    this.statusCode = statusCode;
-    this.code = code;
-  }
-}
-
 function cookieOptions(config: AppConfig) {
   return {
     path: '/api',
@@ -258,16 +249,6 @@ function optionalEncryptionKey(config: AppConfig): string {
   }
 
   return config.APP_ENCRYPTION_KEY;
-}
-
-function parseRequest<T extends z.ZodType>(schema: T, value: unknown): z.infer<T> {
-  const result = schema.safeParse(value);
-
-  if (!result.success) {
-    throw new ApiError(400, 'INVALID_REQUEST', 'Request data is invalid.');
-  }
-
-  return result.data;
 }
 
 function sessionTokenFrom(request: FastifyRequest): string | null {
@@ -334,10 +315,6 @@ async function persistSession(transaction: Prisma.TransactionClient, userId: str
       expiresAt: new Date(Date.now() + SESSION_LIFETIME_SECONDS * 1000),
     },
   });
-}
-
-function isUniqueConstraintError(error: unknown): boolean {
-  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'P2002';
 }
 
 function isSerializationConflictError(error: unknown): boolean {
@@ -428,6 +405,11 @@ export function createApp(options: {
   });
 
   app.setErrorHandler((error, request, reply) => {
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'FST_ERR_CTP_BODY_TOO_LARGE') {
+      return reply.status(413).send({
+        error: { code: 'FILE_TOO_LARGE', message: 'Maksymalny rozmiar pliku to 10 MB.' },
+      });
+    }
     if (error instanceof ApiError) {
       return reply.status(error.statusCode).send({
         error: { code: error.code, message: error.message },
@@ -457,6 +439,32 @@ export function createApp(options: {
     });
   });
 
+  const authenticateWorkspace = async (request: FastifyRequest, mutation: boolean) => {
+    await loadOptionalSession(request, prisma);
+    const session = requireSession(request);
+    if (mutation) requireCsrf(request, session);
+    return session.userId;
+  };
+  const analysisWorker = config.OPENAI_ANALYSIS_ENABLED && config.OPENAI_API_KEY
+    ? attachAnalysisWorker(app, { prisma, key: config.OPENAI_API_KEY, encryptionKey, fetcher }) : undefined;
+  registerAnalysisRoutes(app, {
+    prisma, authenticate: authenticateWorkspace, enabled: () => analysisWorker?.healthy() === true,
+  });
+  registerWorkspaceCostRoutes(app, {
+    prisma, authenticate: authenticateWorkspace, metadataEnabled: config.SDK_METADATA_ENABLED,
+  });
+  registerTaskRunRoutes(app, {
+    prisma, encryptionKey, fetcher, authenticate: authenticateWorkspace, executionEnabled: false,
+  });
+  registerWorkspaceRoutes(app, {
+    prisma,
+    encryptionKey,
+    verifyRepository: (input) => verifyRepositoryAccess({
+      ...input, prisma, fetcher, encryptionKey: encryptionKey(),
+    }),
+    authenticate: authenticateWorkspace,
+  });
+
   app.get('/', async (request, reply) => {
     if (request.headers.host !== new URL(origin).host) {
       return reply.redirect(origin, 302);
@@ -471,6 +479,9 @@ export function createApp(options: {
 
   app.get('/health/live', async () => ({ status: 'ok' }));
   app.get('/health/ready', async (_request, reply) => {
+    if (analysisWorker && !analysisWorker.healthy()) {
+      return reply.status(503).send({ status: 'not_ready', analysisWorker: 'unavailable' });
+    }
     try {
       await prisma.$queryRaw`SELECT 1`;
       return { status: 'ok', database: 'connected' };
@@ -484,6 +495,18 @@ export function createApp(options: {
     repositories: true,
     bots: true,
     projects: true,
+    workspace: {
+      sharedProjects: true,
+      botDefinitions: true,
+      isolatedTeamBots: true,
+      taskAssignmentAndPriority: true,
+      editableHierarchy: true,
+      encryptedAttachments: true,
+      botMessageDrafts: true,
+      perBotSchedules: true,
+      sdkExecution: false,
+      openaiAnalysis: analysisWorker?.healthy() === true,
+    },
     pdfDocuments: {
       upload: true,
       encryptedAtRest: true,
@@ -1002,10 +1025,13 @@ export function createApp(options: {
     const { teamId } = parseRequest(z.object({ teamId: z.string().cuid() }), request.params);
     const { botId } = parseRequest(teamBotSchema, request.body);
     const [team, bot] = await Promise.all([
-      prisma.team.findFirst({ where: { id: teamId, userId: session.userId }, select: { id: true } }),
-      prisma.bot.findFirst({ where: { id: botId, userId: session.userId }, select: { id: true } }),
+      prisma.team.findFirst({ where: { id: teamId, userId: session.userId }, select: { id: true, projectId: true } }),
+      prisma.bot.findFirst({ where: { id: botId, userId: session.userId }, select: { id: true, definitionId: true } }),
     ]);
     if (!team || !bot) throw new ApiError(404, 'TEAM_OR_BOT_NOT_FOUND', 'Nie znaleziono zespołu lub bota.');
+    if (team.projectId || bot.definitionId) {
+      throw new ApiError(409, 'TEAM_INSTANCES_REQUIRED', 'Ten zespół używa osobnych instancji botów. Nie można przypisać globalnego wykonawcy.');
+    }
 
     try {
       const membership = await prisma.teamBot.create({ data: { teamId, botId } });
@@ -1043,7 +1069,7 @@ export function createApp(options: {
       where: {
         teamId,
         botId,
-        team: { userId: session.userId },
+        team: { userId: session.userId, projectId: null },
         bot: { userId: session.userId },
       },
     });
@@ -1544,10 +1570,22 @@ export function createApp(options: {
     const { projectId } = parseRequest(projectIdSchema, request.params);
     const { repository } = parseRequest(projectRepositorySchema, request.body);
     const updated = await prisma.project.updateMany({
-      where: { id: projectId, userId: session.userId },
+      where: {
+        id: projectId,
+        userId: session.userId,
+        OR: [{ teams: { none: {} } }, { repository }],
+      },
       data: { repository },
     });
-    if (updated.count !== 1) throw new ApiError(404, 'PROJECT_NOT_FOUND', 'Nie znaleziono projektu.');
+    if (updated.count !== 1) {
+      const project = await prisma.project.findFirst({
+        where: { id: projectId, userId: session.userId }, select: { id: true },
+      });
+      if (project) {
+        throw new ApiError(409, 'PROJECT_REPOSITORY_LOCKED', 'Nie można zmienić repozytorium projektu z przypisanymi zespołami.');
+      }
+      throw new ApiError(404, 'PROJECT_NOT_FOUND', 'Nie znaleziono projektu.');
+    }
 
     await prisma.auditEvent.create({
       data: {
@@ -1867,6 +1905,7 @@ export function createApp(options: {
   }, async (request) => {
     const session = requireSession(request);
     const params = parseRequest(z.object({ accountId: z.string().cuid() }), request.params);
+    const { page } = parseRequest(z.object({ page: z.coerce.number().int().positive().default(1) }), request.query);
     const account = await prisma.gitHubAccount.findFirst({
       where: { id: params.accountId, userId: session.userId },
     });
@@ -1883,27 +1922,46 @@ export function createApp(options: {
       throw new ApiError(401, 'GITHUB_REAUTH_REQUIRED', 'Reconnect this GitHub account to continue.');
     }
 
-    const response = await fetcher(
-      'https://api.github.com/user/repos?affiliation=owner%2Ccollaborator%2Corganization_member&sort=updated&per_page=100',
-      {
-        headers: {
-          accept: 'application/vnd.github+json',
-          authorization: `Bearer ${decryptSecret(account.encryptedAccessToken, encryptionKey())}`,
-          'x-github-api-version': '2022-11-28',
+    let response: Response;
+    try {
+      response = await fetcher(
+        `https://api.github.com/user/repos?affiliation=owner%2Ccollaborator%2Corganization_member&sort=updated&per_page=100&page=${page}`,
+        {
+          headers: {
+            accept: 'application/vnd.github+json',
+            authorization: `Bearer ${decryptSecret(account.encryptedAccessToken, encryptionKey())}`,
+            'x-github-api-version': '2022-11-28',
+          },
+          signal: AbortSignal.timeout(10000),
         },
-        signal: AbortSignal.timeout(10000),
-      },
-    );
+      );
+    } catch (error) {
+      if (!(error instanceof TypeError) && !(error instanceof DOMException)) throw error;
+      throw new ApiError(502, 'GITHUB_REPOSITORIES_UNAVAILABLE', 'Nie udało się połączyć z GitHub.');
+    }
 
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
       await prisma.gitHubAccount.update({ where: { id: account.id }, data: { status: 'REAUTH_REQUIRED' } });
       throw new ApiError(401, 'GITHUB_REAUTH_REQUIRED', 'GitHub authorization expired or lost repository access.');
+    }
+    if (response.status === 429 || (response.status === 403 && response.headers.get('x-ratelimit-remaining') === '0')) {
+      throw new ApiError(429, 'GITHUB_RATE_LIMITED', 'GitHub ograniczył liczbę żądań. Spróbuj później.');
+    }
+    if (response.status === 403) {
+      throw new ApiError(403, 'GITHUB_REPOSITORY_FORBIDDEN', 'GitHub odmówił dostępu do listy repozytoriów.');
     }
 
     if (!response.ok) {
       throw new ApiError(502, 'GITHUB_REPOSITORIES_UNAVAILABLE', 'GitHub repositories could not be loaded.');
     }
 
+    let body: unknown;
+    try {
+      body = await response.json();
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+      throw new ApiError(502, 'GITHUB_REPOSITORIES_INVALID', 'GitHub zwrócił nieprawidłową listę repozytoriów.');
+    }
     const repositories = z.array(z.object({
       id: z.number().int().positive(),
       full_name: z.string(),
@@ -1912,13 +1970,14 @@ export function createApp(options: {
       private: z.boolean(),
       owner: z.object({ login: z.string() }),
       permissions: z.object({ push: z.boolean().optional() }).passthrough().optional(),
-    })).safeParse(await response.json());
+    })).safeParse(body);
 
     if (!repositories.success) {
       throw new ApiError(502, 'GITHUB_REPOSITORIES_INVALID', 'GitHub returned invalid repository data.');
     }
 
     return {
+      nextPage: response.headers.get('link')?.includes('rel="next"') ? page + 1 : null,
       repositories: repositories.data.map((repository) => ({
         id: String(repository.id),
         fullName: repository.full_name,
@@ -1984,59 +2043,27 @@ export function createApp(options: {
       throw new ApiError(400, 'INVALID_STAGE_ORDER', 'Stage numbers must be unique and start at 1 without gaps.');
     }
 
-    const account = await prisma.gitHubAccount.findFirst({
-      where: { id: body.githubAccountId, userId: session.userId, status: 'ACTIVE' },
+    const repository = await verifyRepositoryAccess({
+      prisma,
+      fetcher,
+      encryptionKey: encryptionKey(),
+      userId: session.userId,
+      githubAccountId: body.githubAccountId,
+      repository: body.repository,
     });
-
-    if (!account) {
-      throw new ApiError(404, 'GITHUB_ACCOUNT_NOT_AVAILABLE', 'Choose an active GitHub account you own.');
-    }
-
-    const repositoryResponse = await fetcher(
-      `https://api.github.com/repos/${body.repository.split('/').map(encodeURIComponent).join('/')}`,
-      {
-        headers: {
-          accept: 'application/vnd.github+json',
-          authorization: `Bearer ${decryptSecret(account.encryptedAccessToken, encryptionKey())}`,
-          'x-github-api-version': '2022-11-28',
-        },
-        signal: AbortSignal.timeout(10000),
-      },
-    );
-
-    if (repositoryResponse.status === 401 || repositoryResponse.status === 403) {
-      await prisma.gitHubAccount.update({ where: { id: account.id }, data: { status: 'REAUTH_REQUIRED' } });
-      throw new ApiError(401, 'GITHUB_REAUTH_REQUIRED', 'GitHub authorization expired or cannot access this repository.');
-    }
-
-    if (!repositoryResponse.ok) {
-      throw new ApiError(404, 'GITHUB_REPOSITORY_NOT_FOUND', 'Repository was not found or is not accessible.');
-    }
-
-    const repository = z.object({
-      id: z.number().int().positive(),
-      full_name: z.string(),
-      default_branch: z.string(),
-      permissions: z.object({ push: z.boolean().optional() }).passthrough().optional(),
-    }).safeParse(await repositoryResponse.json());
-
-    if (!repository.success || String(repository.data.id) !== body.repositoryId || repository.data.full_name.toLowerCase() !== body.repository.toLowerCase()) {
+    if (repository.repositoryId !== body.repositoryId) {
       throw new ApiError(400, 'GITHUB_REPOSITORY_MISMATCH', 'Choose the verified repository returned by GitHub.');
-    }
-
-    if (repository.data.permissions?.push !== true) {
-      throw new ApiError(403, 'GITHUB_REPOSITORY_READ_ONLY', 'The selected GitHub account must have push access.');
     }
 
     const bot = await prisma.$transaction(async (transaction) => {
       const created = await transaction.bot.create({
         data: {
           userId: session.userId,
-          githubAccountId: account.id,
+          githubAccountId: repository.githubAccountId,
           name: body.name,
           repositoryId: body.repositoryId,
-          repository: repository.data.full_name,
-          defaultBranch: repository.data.default_branch,
+          repository: repository.repository,
+          defaultBranch: repository.defaultBranch,
           systemPrompt: body.systemPrompt,
           stages: {
             create: body.stages.map((stage) => ({
@@ -2676,6 +2703,9 @@ export function createApp(options: {
     const session = requireSession(request);
     const { stageId } = parseRequest(z.object({ stageId: z.string().cuid() }), request.params);
     const { reason } = parseRequest(transitionBodySchema, request.body ?? {});
+    if (action === 'CHANGES_REQUESTED' && !reason) {
+      throw new ApiError(400, 'REVISION_INSTRUCTIONS_REQUIRED', 'Opisz, co zespół ma poprawić.');
+    }
 
     let approvedSha: string | null = null;
     if (action === 'APPROVED') {
@@ -2718,7 +2748,7 @@ export function createApp(options: {
         throw new ApiError(409, 'STAGE_CHANGED_CONCURRENTLY', 'This stage has changed. Refresh and try again.');
       }
 
-      await transaction.stageTransitionEvent.create({
+      const transitionEvent = await transaction.stageTransitionEvent.create({
         data: {
           stageId: stage.id,
           fromStatus: transition.previousStatus,
@@ -2738,7 +2768,7 @@ export function createApp(options: {
         },
       });
 
-      return { id: stage.id, status: transition.status, occurredAt: transition.occurredAt };
+      return { id: stage.id, status: transition.status, occurredAt: transition.occurredAt, transitionId: transitionEvent.id };
     }, { isolationLevel: 'Serializable' });
   }
 
@@ -2802,6 +2832,10 @@ export function createApp(options: {
 
       if (!stage) {
         throw new ApiError(404, 'STAGE_NOT_FOUND', 'Stage was not found.');
+      }
+
+      if (stage.bot.definitionId) {
+        throw new ApiError(409, 'SDK_RUNTIME_REQUIRED', 'Ten bot wymaga sesji Copilot SDK. Nie zostanie uruchomiony przez Agent Tasks API.');
       }
 
       await assertPlanningAllowsStart(transaction, session.userId, new Date());
@@ -3271,7 +3305,10 @@ export function createApp(options: {
     return { id: notificationId, read: true };
   });
 
-  app.addHook('onClose', async () => prisma.$disconnect());
+  app.addHook('onClose', async () => {
+    await analysisWorker?.stop();
+    await prisma.$disconnect();
+  });
 
   return app;
 }

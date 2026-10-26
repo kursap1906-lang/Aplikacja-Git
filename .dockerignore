@@ -3,6 +3,7 @@
 .env.*
 !.env.example
 node_modules
+sdk-worker/node_modules
 mobile/.dart_tool
 backups
 coverage

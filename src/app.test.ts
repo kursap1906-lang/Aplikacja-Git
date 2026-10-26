@@ -34,6 +34,147 @@ function makePrisma(sessionCsrfToken?: string, overrides: Record<string, unknown
   return prisma as unknown as PrismaClient;
 }
 
+test('disabled SDK executor rejects starts without queuing or mutating tasks', async (context) => {
+  const app = createApp({ config: testConfig(), prisma: makePrisma('csrf-secret') });
+  context.after(() => app.close());
+  const url = '/api/workspace/tasks/cltesttask000000000000001/runs';
+  const unauthorized = await app.inject({ method: 'POST', url });
+  assert.equal(unauthorized.statusCode, 401);
+  const headers = { authorization: 'Bearer fixture-session' };
+  const noCsrf = await app.inject({ method: 'POST', url, headers });
+  assert.equal(noCsrf.statusCode, 403);
+  const unavailable = await app.inject({
+    method: 'POST', url, headers: { ...headers, 'x-csrf-token': 'csrf-secret' },
+  });
+  assert.equal(unavailable.statusCode, 503, unavailable.body);
+  assert.equal(unavailable.json().error.code, 'SDK_EXECUTION_UNAVAILABLE');
+  const capabilities = await app.inject({ url: '/api/capabilities' });
+  assert.equal(capabilities.json().workspace.sdkExecution, false);
+});
+
+test('repository listing supports explicit pages and indicates continuation without exposing credentials', async (context) => {
+  const config = testConfig();
+  const accountId = 'cltestaccount0000000000001';
+  const pages: string[] = [];
+  const app = createApp({
+    config,
+    prisma: makePrisma('csrf', {
+      gitHubAccount: {
+        findFirst: async (args: { where: { id: string; userId: string } }) => {
+          assert.deepEqual(args.where, { id: accountId, userId: 'user-id' });
+          return {
+            id: accountId, userId: 'user-id', status: 'ACTIVE', tokenExpiresAt: null,
+            encryptedAccessToken: encryptSecret('fixture-github-token', config.APP_ENCRYPTION_KEY!),
+          };
+        },
+      },
+    }),
+    fetcher: async (input) => {
+      const url = new URL(String(input));
+      pages.push(url.searchParams.get('page')!);
+      return new Response(JSON.stringify([{
+        id: 123, full_name: 'fixture/repository', name: 'repository',
+        default_branch: 'main', private: true, owner: { login: 'fixture' },
+        permissions: { push: true },
+      }]), {
+        status: 200,
+        headers: url.searchParams.get('page') === '2'
+          ? { link: '<https://api.github.com/user/repos?page=3>; rel="next"' }
+          : {},
+      });
+    },
+  });
+  context.after(() => app.close());
+  const headers = { authorization: 'Bearer fixture-session' };
+  const second = await app.inject({ url: `/api/github/accounts/${accountId}/repositories?page=2`, headers });
+  assert.equal(second.statusCode, 200);
+  assert.equal(second.json().nextPage, 3);
+  assert.deepEqual(second.json().repositories[0], {
+    id: '123', fullName: 'fixture/repository', name: 'repository', owner: 'fixture',
+    defaultBranch: 'main', isPrivate: true, canPush: true,
+  });
+  assert.ok(!second.body.includes('fixture-github-token'));
+  const third = await app.inject({ url: `/api/github/accounts/${accountId}/repositories?page=3`, headers });
+  assert.equal(third.json().nextPage, null);
+  assert.deepEqual(pages, ['2', '3']);
+  for (const page of ['0', '-1', '1.5', 'invalid']) {
+    const invalid = await app.inject({ url: `/api/github/accounts/${accountId}/repositories?page=${page}`, headers });
+    assert.equal(invalid.statusCode, 400);
+  }
+  assert.deepEqual(pages, ['2', '3']);
+});
+
+for (const scenario of [
+  { status: 401, rateLimited: false, expected: 401, code: 'GITHUB_REAUTH_REQUIRED', updates: 1 },
+  { status: 403, rateLimited: false, expected: 403, code: 'GITHUB_REPOSITORY_FORBIDDEN', updates: 0 },
+  { status: 403, rateLimited: true, expected: 429, code: 'GITHUB_RATE_LIMITED', updates: 0 },
+  { status: 429, rateLimited: false, expected: 429, code: 'GITHUB_RATE_LIMITED', updates: 0 },
+]) {
+  test(`repository listing handles ${scenario.status}${scenario.rateLimited ? ' rate limit' : ''} without falsely revoking an account`, async (context) => {
+    const config = testConfig();
+    let updates = 0;
+    const app = createApp({
+      config,
+      prisma: makePrisma('csrf', {
+        gitHubAccount: {
+          findFirst: async () => ({
+            status: 'ACTIVE', tokenExpiresAt: null,
+            encryptedAccessToken: encryptSecret('fixture-token', config.APP_ENCRYPTION_KEY!),
+          }),
+          update: async () => { updates++; },
+        },
+      }),
+      fetcher: async () => new Response('{}', {
+        status: scenario.status,
+        headers: scenario.rateLimited ? { 'x-ratelimit-remaining': '0' } : {},
+      }),
+    });
+    context.after(() => app.close());
+    const response = await app.inject({
+      url: '/api/github/accounts/cltestaccount0000000000001/repositories',
+      headers: { authorization: 'Bearer fixture-session' },
+    });
+    assert.equal(response.statusCode, scenario.expected);
+    assert.equal(response.json().error.code, scenario.code);
+    assert.equal(updates, scenario.updates);
+  });
+}
+
+test('repository listing reports transport and malformed-response errors explicitly', async (context) => {
+  const config = testConfig();
+  const replies: Array<Response | Error> = [
+    new TypeError('offline'),
+    new Response('invalid-json', { status: 200 }),
+    new Response('{}', { status: 200 }),
+  ];
+  const app = createApp({
+    config,
+    prisma: makePrisma('csrf', {
+      gitHubAccount: {
+        findFirst: async () => ({
+          status: 'ACTIVE', tokenExpiresAt: null,
+          encryptedAccessToken: encryptSecret('fixture-token', config.APP_ENCRYPTION_KEY!),
+        }),
+      },
+    }),
+    fetcher: async () => {
+      const reply = replies.shift();
+      if (!reply) throw new Error('Unexpected GitHub request.');
+      if (reply instanceof Error) throw reply;
+      return reply;
+    },
+  });
+  context.after(() => app.close());
+  for (const code of ['GITHUB_REPOSITORIES_UNAVAILABLE', 'GITHUB_REPOSITORIES_INVALID', 'GITHUB_REPOSITORIES_INVALID']) {
+    const response = await app.inject({
+      url: '/api/github/accounts/cltestaccount0000000000001/repositories',
+      headers: { authorization: 'Bearer fixture-session' },
+    });
+    assert.equal(response.statusCode, 502);
+    assert.equal(response.json().error.code, code);
+  }
+});
+
 test('reports service liveness without a database connection', async (context) => {
   const app = createApp({ prisma: makePrisma(), config: testConfig() });
   context.after(() => app.close());
@@ -1094,6 +1235,7 @@ test('reports an unconfirmed GitHub task before validating a RUNNING to RUNNING 
         botId: 'clbot0000000000000000000000',
         number: 1,
         status: 'RUNNING',
+        bot: { definitionId: null },
       }),
     },
     backgroundJob: {
