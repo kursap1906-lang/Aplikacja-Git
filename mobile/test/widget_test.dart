@@ -12,37 +12,42 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  testWidgets('mobile navigation exposes every destination from the specification', (tester) async {
-    tester.view.physicalSize = const Size(390, 844);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.resetPhysicalSize);
-    final router = createAppRouter(initialLocation: '/teams');
-    addTearDown(router.dispose);
+  testWidgets(
+    'mobile navigation exposes every destination from the specification',
+    (tester) async {
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      final router = createAppRouter(initialLocation: '/teams');
+      addTearDown(router.dispose);
 
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [
-          botsProvider.overrideWith((ref) async => []),
-        ],
-        child: MaterialApp.router(
-          theme: AppTheme.dark,
-          routerConfig: router,
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            botsProvider.overrideWith((ref) async => []),
+            projectsProvider.overrideWith((ref) async => []),
+            teamsProvider.overrideWith((ref) async => []),
+          ],
+          child: MaterialApp.router(theme: AppTheme.dark, routerConfig: router),
         ),
-      ),
-    );
-    await tester.pumpAndSettle();
+      );
+      await tester.pumpAndSettle();
 
-    expect(appNavigationDestinations, hasLength(15));
-    await tester.tap(find.byTooltip('Otwórz nawigację'));
-    await tester.pumpAndSettle();
-    for (final destination in appNavigationDestinations) {
-      expect(find.text(destination.label), findsWidgets);
-    }
+      expect(appNavigationDestinations, hasLength(15));
+      expect(find.text('Więcej'), findsOneWidget);
+      expect(find.text('Zadania'), findsOneWidget);
+      await tester.tap(find.byTooltip('Otwórz nawigację'));
+      await tester.pumpAndSettle();
+      for (final destination in appNavigationDestinations) {
+        expect(find.text(destination.label), findsWidgets);
+      }
 
-    await tester.tap(find.text('Projekty i PDF'));
-    await tester.pumpAndSettle();
-    expect(find.text('Przechowywanie PDF nie jest jeszcze skonfigurowane'), findsOneWidget);
-  });
+      await tester.tap(find.text('Projekty i PDF'));
+      await tester.pumpAndSettle();
+      expect(find.text('Nowy projekt'), findsOneWidget);
+      expect(find.text('Nie ma jeszcze projektów'), findsOneWidget);
+    },
+  );
 
   testWidgets(
     'login screen offers local login and account registration before GitHub linking',
@@ -66,6 +71,200 @@ void main() {
       expect(find.text('Kontynuuj przez GitHub'), findsNothing);
     },
   );
+
+  testWidgets(
+    'projects screen displays the pinned progress scan and scan action',
+    (tester) async {
+      final router = createAppRouter(initialLocation: '/projects');
+      addTearDown(router.dispose);
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            projectsProvider.overrideWith(
+              (ref) async => [
+                {
+                  'id': 'project-1',
+                  'name': 'Demo project',
+                  'repository': 'owner/repo',
+                  'description': '',
+                  'documents': [],
+                  'scans': [
+                    {
+                      'lifecycleStage': 'IMPLEMENTATION',
+                      'summary': 'Commit abc123; one task in progress.',
+                      'treeTruncated': false,
+                    },
+                  ],
+                },
+              ],
+            ),
+          ],
+          child: MaterialApp.router(theme: AppTheme.dark, routerConfig: router),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Demo project'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Etap projektu: realizacja'), findsOneWidget);
+      expect(find.text('Commit abc123; one task in progress.'), findsOneWidget);
+      expect(find.text('Skanuj postęp projektu'), findsOneWidget);
+    },
+  );
+
+  testWidgets('teams screen shows durable team members and available bots', (
+    tester,
+  ) async {
+    final router = createAppRouter(initialLocation: '/teams');
+    addTearDown(router.dispose);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          teamsProvider.overrideWith(
+            (ref) async => [
+              {
+                'id': 'team-1',
+                'name': 'Frontend',
+                'description': 'Web app',
+                'bots': [
+                  {
+                    'bot': {
+                      'id': 'bot-1',
+                      'name': 'Builder',
+                      'repository': 'owner/repo',
+                    },
+                  },
+                ],
+              },
+            ],
+          ),
+          botsProvider.overrideWith(
+            (ref) async => [
+              {'id': 'bot-1', 'name': 'Builder', 'repository': 'owner/repo'},
+            ],
+          ),
+        ],
+        child: MaterialApp.router(theme: AppTheme.dark, routerConfig: router),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Frontend'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('1 botów przypisanych'), findsOneWidget);
+    expect(find.text('Builder · owner/repo'), findsOneWidget);
+    expect(find.text('Nowy zespół'), findsOneWidget);
+  });
+
+  testWidgets(
+    'collaboration screen stores project notes without claiming resume',
+    (tester) async {
+      final router = createAppRouter(initialLocation: '/collaboration');
+      addTearDown(router.dispose);
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            projectsProvider.overrideWith(
+              (ref) async => [
+                {'id': 'project-1', 'name': 'Portal'},
+              ],
+            ),
+            projectCollaborationProvider('project-1').overrideWith(
+              (ref) async => {
+                'messages': [],
+                'helpRequests': [],
+                'checkpoints': [],
+              },
+            ),
+          ],
+          child: MaterialApp.router(theme: AppTheme.dark, routerConfig: router),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Dziennik projektu'), findsOneWidget);
+      expect(find.text('Prośby o pomoc'), findsOneWidget);
+      expect(find.text('Ręczne checkpointy'), findsOneWidget);
+      expect(find.textContaining('nie wznawiają zadania'), findsOneWidget);
+    },
+  );
+
+  testWidgets('costs screen separates imported usage from subscriptions', (
+    tester,
+  ) async {
+    final router = createAppRouter(initialLocation: '/costs');
+    addTearDown(router.dispose);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          costsProvider.overrideWith(
+            (ref) async => {
+              'budget': {
+                'monthlyLimitMinor': 5000,
+                'currency': 'USD',
+                'enforce': true,
+              },
+              'month': [
+                {'category': 'USAGE', 'currency': 'USD', 'amountMinor': 1250},
+                {'category': 'SUBSCRIPTION', 'currency': 'USD', 'amountMinor': 1000},
+              ],
+              'entries': [],
+            },
+          ),
+        ],
+        child: MaterialApp.router(theme: AppTheme.dark, routerConfig: router),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Zużycie: 12.50 USD'), findsOneWidget);
+    expect(find.text('Subskrypcje: 10.00 USD'), findsOneWidget);
+    expect(find.text('Brak automatycznego źródła rozliczeń'), findsOneWidget);
+  });
+
+  testWidgets('project task board displays dependency status evidence', (
+    tester,
+  ) async {
+    final router = createAppRouter(initialLocation: '/tasks');
+    addTearDown(router.dispose);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          botsProvider.overrideWith((ref) async => []),
+          projectsProvider.overrideWith((ref) async => []),
+          projectTasksProvider.overrideWith(
+            (ref) async => [
+              {
+                'id': 'task-2',
+                'title': 'Build screen',
+                'status': 'TODO',
+                'project': {'id': 'project-1', 'name': 'Portal'},
+                'prerequisites': [
+                  {
+                    'dependsOn': {
+                      'id': 'task-1',
+                      'title': 'Create API',
+                      'status': 'IN_PROGRESS',
+                    },
+                  },
+                ],
+              },
+            ],
+          ),
+        ],
+        child: MaterialApp.router(theme: AppTheme.dark, routerConfig: router),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Zadania projektu i zależności'), findsOneWidget);
+    expect(find.text('Build screen'), findsOneWidget);
+    expect(find.textContaining('Create API'), findsOneWidget);
+    expect(
+      find.textContaining('oczekuje na ukończenie zależności'),
+      findsOneWidget,
+    );
+  });
 
   testWidgets('dashboard shows API-driven empty state and navigation actions', (
     tester,
@@ -252,10 +451,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(
-        find.textContaining('Nie udało się potwierdzić'),
-        findsOneWidget,
-      );
+      expect(find.textContaining('Nie udało się potwierdzić'), findsOneWidget);
       expect(find.text('Sprawdź status Copilota'), findsNothing);
       await tester.ensureVisible(
         find.text('Sprawdziłem GitHub — ponów zadanie'),
@@ -309,11 +505,11 @@ void main() {
       final approval = tester.widget<FilledButton>(
         find.widgetWithText(FilledButton, 'Zatwierdź etap'),
       );
-      expect(approval.onPressed, isNull);
+      expect(approval.onPressed, isNotNull);
       expect(find.text('Poproś o poprawki'), findsOneWidget);
       expect(
         find.text(
-          'Akceptacja jest zablokowana, dopóki serwer nie potwierdzi CI, aktualnego preview i testów. Prośba o poprawki zapisuje uwagi; ponowne zadanie uruchomisz po ich sprawdzeniu.',
+          'Akceptacja wymaga, by serwer potwierdził zielone CI oraz zaliczony test manualny dla aktualnego commita PR. Preview nie jest jeszcze wymuszane. Prośba o poprawki zapisuje uwagi; ponowne zadanie uruchomisz po ich sprawdzeniu.',
         ),
         findsOneWidget,
       );

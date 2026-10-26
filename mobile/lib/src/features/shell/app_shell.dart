@@ -3,23 +3,43 @@ import 'package:go_router/go_router.dart';
 
 import '../../theme.dart';
 
-typedef NavigationDestination = ({String path, String label, IconData icon});
+typedef AppNavigationDestination = ({String path, String label, IconData icon});
 
-const appNavigationDestinations = <NavigationDestination>[
+const appNavigationDestinations = <AppNavigationDestination>[
   (path: '/dashboard', label: 'Pulpit', icon: Icons.space_dashboard_outlined),
   (path: '/teams', label: 'Zespoły AI', icon: Icons.groups_outlined),
   (path: '/bots', label: 'Boty i role', icon: Icons.smart_toy_outlined),
-  (path: '/accounts', label: 'Konta GitHub', icon: Icons.account_circle_outlined),
+  (
+    path: '/accounts',
+    label: 'Konta GitHub',
+    icon: Icons.account_circle_outlined,
+  ),
   (path: '/repositories', label: 'Repozytoria', icon: Icons.source_outlined),
-  (path: '/projects', label: 'Projekty i PDF', icon: Icons.folder_open_outlined),
+  (
+    path: '/projects',
+    label: 'Projekty i PDF',
+    icon: Icons.folder_open_outlined,
+  ),
   (path: '/tasks', label: 'Zadania i etapy', icon: Icons.task_alt_outlined),
   (path: '/collaboration', label: 'Współpraca', icon: Icons.forum_outlined),
-  (path: '/pull-requests', label: 'Pull Requesty', icon: Icons.merge_type_outlined),
+  (
+    path: '/pull-requests',
+    label: 'Pull Requesty',
+    icon: Icons.merge_type_outlined,
+  ),
   (path: '/code-center', label: 'Code Center', icon: Icons.code_rounded),
   (path: '/review', label: 'Review Center', icon: Icons.fact_check_outlined),
-  (path: '/schedule', label: 'Harmonogram pracy', icon: Icons.calendar_month_outlined),
+  (
+    path: '/schedule',
+    label: 'Harmonogram pracy',
+    icon: Icons.calendar_month_outlined,
+  ),
   (path: '/costs', label: 'Koszty AI', icon: Icons.payments_outlined),
-  (path: '/notifications', label: 'Powiadomienia', icon: Icons.notifications_none_rounded),
+  (
+    path: '/notifications',
+    label: 'Powiadomienia',
+    icon: Icons.notifications_none_rounded,
+  ),
   (path: '/settings', label: 'Ustawienia', icon: Icons.settings_outlined),
 ];
 
@@ -28,7 +48,7 @@ class AppShell extends StatelessWidget {
 
   final Widget child;
 
-  NavigationDestination destinationFor(String route) {
+  AppNavigationDestination destinationFor(String route) {
     if (route.contains('/pull-requests/')) {
       return appNavigationDestinations[8];
     }
@@ -95,6 +115,42 @@ class AppShell extends StatelessWidget {
                 ),
               ),
             ),
+            bottomNavigationBar: Builder(
+              builder: (navigationContext) => NavigationBar(
+                selectedIndex: switch (selected.path) {
+                  '/dashboard' => 0,
+                  '/tasks' => 1,
+                  '/review' => 2,
+                  _ => 3,
+                },
+                destinations: const [
+                  NavigationDestination(
+                    icon: Icon(Icons.space_dashboard_outlined),
+                    label: 'Pulpit',
+                  ),
+                  NavigationDestination(
+                    icon: Icon(Icons.task_alt_outlined),
+                    label: 'Zadania',
+                  ),
+                  NavigationDestination(
+                    icon: Icon(Icons.fact_check_outlined),
+                    label: 'Review',
+                  ),
+                  NavigationDestination(
+                    icon: Icon(Icons.more_horiz_rounded),
+                    label: 'Więcej',
+                  ),
+                ],
+                onDestinationSelected: (index) {
+                  if (index == 3) {
+                    Scaffold.of(navigationContext).openDrawer();
+                  } else {
+                    const routes = ['/dashboard', '/tasks', '/review'];
+                    context.go(routes[index]);
+                  }
+                },
+              ),
+            ),
             body: child,
           );
         }
@@ -156,28 +212,28 @@ class _Brand extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.fromLTRB(20, 22, 16, 20),
-        child: Row(
-          children: [
-            Container(
-              width: 34,
-              height: 34,
-              decoration: BoxDecoration(
-                color: AppColors.blue.withValues(alpha: .14),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: const Icon(Icons.hub_rounded, color: AppColors.blue, size: 19),
-            ),
-            const SizedBox(width: 11),
-            const Expanded(
-              child: Text(
-                'Copilot\nControl Center',
-                style: TextStyle(fontWeight: FontWeight.w700, height: 1.2),
-              ),
-            ),
-          ],
+    padding: const EdgeInsets.fromLTRB(20, 22, 16, 20),
+    child: Row(
+      children: [
+        Container(
+          width: 34,
+          height: 34,
+          decoration: BoxDecoration(
+            color: AppColors.blue.withValues(alpha: .14),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: const Icon(Icons.hub_rounded, color: AppColors.blue, size: 19),
         ),
-      );
+        const SizedBox(width: 11),
+        const Expanded(
+          child: Text(
+            'Copilot\nControl Center',
+            style: TextStyle(fontWeight: FontWeight.w700, height: 1.2),
+          ),
+        ),
+      ],
+    ),
+  );
 }
 
 class _ContextBar extends StatelessWidget {
@@ -193,33 +249,33 @@ class _ContextBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        height: 62,
-        decoration: const BoxDecoration(
-          border: Border(bottom: BorderSide(color: AppColors.stroke)),
+    height: 62,
+    decoration: const BoxDecoration(
+      border: Border(bottom: BorderSide(color: AppColors.stroke)),
+    ),
+    padding: const EdgeInsets.symmetric(horizontal: 24),
+    child: Row(
+      children: [
+        Text(label, style: const TextStyle(fontWeight: FontWeight.w600)),
+        const SizedBox(width: 12),
+        const Text(
+          '·  Bez wybranego projektu',
+          style: TextStyle(color: AppColors.muted, fontSize: 12),
         ),
-        padding: const EdgeInsets.symmetric(horizontal: 24),
-        child: Row(
-          children: [
-            Text(label, style: const TextStyle(fontWeight: FontWeight.w600)),
-            const SizedBox(width: 12),
-            const Text(
-              '·  Bez wybranego projektu',
-              style: TextStyle(color: AppColors.muted, fontSize: 12),
-            ),
-            const Spacer(),
-            IconButton(
-              tooltip: 'Powiadomienia',
-              onPressed: onNotifications,
-              icon: const Icon(Icons.notifications_none_rounded),
-            ),
-            IconButton(
-              tooltip: 'Ustawienia',
-              onPressed: onSettings,
-              icon: const Icon(Icons.account_circle_outlined),
-            ),
-          ],
+        const Spacer(),
+        IconButton(
+          tooltip: 'Powiadomienia',
+          onPressed: onNotifications,
+          icon: const Icon(Icons.notifications_none_rounded),
         ),
-      );
+        IconButton(
+          tooltip: 'Ustawienia',
+          onPressed: onSettings,
+          icon: const Icon(Icons.account_circle_outlined),
+        ),
+      ],
+    ),
+  );
 }
 
 class _DestinationButton extends StatelessWidget {
@@ -229,44 +285,44 @@ class _DestinationButton extends StatelessWidget {
     required this.onPressed,
   });
 
-  final NavigationDestination item;
+  final AppNavigationDestination item;
   final bool selected;
   final VoidCallback onPressed;
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 2),
-        child: Material(
-          color: selected ? AppColors.panelRaised : Colors.transparent,
-          borderRadius: BorderRadius.circular(8),
-          child: InkWell(
-            borderRadius: BorderRadius.circular(8),
-            onTap: onPressed,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 9),
-              child: Row(
-                children: [
-                  Icon(
-                    item.icon,
-                    size: 19,
-                    color: selected ? AppColors.blue : AppColors.muted,
-                  ),
-                  const SizedBox(width: 11),
-                  Expanded(
-                    child: Text(
-                      item.label,
-                      style: TextStyle(
-                        color: selected ? AppColors.foreground : AppColors.muted,
-                        fontSize: 13,
-                      ),
-                    ),
-                  ),
-                ],
+    padding: const EdgeInsets.symmetric(vertical: 2),
+    child: Material(
+      color: selected ? AppColors.panelRaised : Colors.transparent,
+      borderRadius: BorderRadius.circular(8),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: onPressed,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 9),
+          child: Row(
+            children: [
+              Icon(
+                item.icon,
+                size: 19,
+                color: selected ? AppColors.blue : AppColors.muted,
               ),
-            ),
+              const SizedBox(width: 11),
+              Expanded(
+                child: Text(
+                  item.label,
+                  style: TextStyle(
+                    color: selected ? AppColors.foreground : AppColors.muted,
+                    fontSize: 13,
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
-      );
+      ),
+    ),
+  );
 }
 
 class _NavigationFootnote extends StatelessWidget {
@@ -274,10 +330,10 @@ class _NavigationFootnote extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => const Padding(
-        padding: EdgeInsets.fromLTRB(18, 10, 18, 16),
-        child: Text(
-          'Etap można zatwierdzić dopiero po weryfikacji CI, preview i testów.',
-          style: TextStyle(color: AppColors.muted, fontSize: 11, height: 1.5),
-        ),
-      );
+    padding: EdgeInsets.fromLTRB(18, 10, 18, 16),
+    child: Text(
+      'Etap można zatwierdzić po weryfikacji CI i testu manualnego dla aktualnego commita.',
+      style: TextStyle(color: AppColors.muted, fontSize: 11, height: 1.5),
+    ),
+  );
 }

@@ -57,6 +57,26 @@ enum OAuthClientType {
   NATIVE
 }
 
+enum ProjectProgressStage {
+  DISCOVERY
+  PLANNING
+  IMPLEMENTATION
+  BLOCKED
+  VALIDATION
+}
+
+enum ProjectTaskStatus {
+  TODO
+  IN_PROGRESS
+  BLOCKED
+  COMPLETED
+}
+
+enum ProjectHelpRequestStatus {
+  OPEN
+  RESOLVED
+}
+
 
 model User {
   id                    String           @id @default(cuid())
@@ -72,6 +92,17 @@ model User {
   oauthFlows             OAuthFlow[]
   oauthHandoffs           OAuthHandoff[]
   bots                   Bot[]
+  projects               Project[]
+  uploadedDocumentVersions DocumentVersion[]
+  teams                  Team[]
+  projectTasks           ProjectTask[]
+  projectMessages        ProjectMessage[]
+  projectHelpRequests    ProjectHelpRequest[]
+  projectCheckpoints     ProjectCheckpoint[]
+  reviewEvidence         ReviewEvidence[]
+  workSchedule           WorkSchedule?
+  costBudget             CostBudget?
+  costEntries            CostEntry[]
   notifications          Notification[]
   auditEvents            AuditEvent[]
   devices                PushDevice[]
@@ -142,11 +173,188 @@ model Bot {
   user             User           @relation(fields: [userId], references: [id], onDelete: Restrict)
   githubAccount    GitHubAccount  @relation(fields: [githubAccountId], references: [id], onDelete: Restrict)
   stages           Stage[]
+  teamMemberships  TeamBot[]
   notifications    Notification[]
   auditEvents      AuditEvent[]
 
   @@index([userId, status])
   @@index([githubAccountId, repositoryId])
+}
+
+model Project {
+  id          String     @id @default(cuid())
+  userId      String
+  name        String
+  description String     @default("") @db.Text
+  repository  String?
+  createdAt   DateTime   @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime   @updatedAt @db.Timestamptz(6)
+  user        User       @relation(fields: [userId], references: [id], onDelete: Restrict)
+  documents   Document[]
+  scans       ProjectScan[]
+  tasks       ProjectTask[]
+  messages    ProjectMessage[]
+  helpRequests ProjectHelpRequest[]
+  checkpoints ProjectCheckpoint[]
+
+  @@index([userId, updatedAt])
+}
+
+model Team {
+  id          String    @id @default(cuid())
+  userId      String
+  name        String
+  description String    @default("") @db.Text
+  createdAt   DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(6)
+  user        User      @relation(fields: [userId], references: [id], onDelete: Restrict)
+  bots        TeamBot[]
+
+  @@unique([userId, name])
+  @@index([userId, updatedAt])
+}
+
+model TeamBot {
+  id        String   @id @default(cuid())
+  teamId    String
+  botId     String
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  team      Team     @relation(fields: [teamId], references: [id], onDelete: Restrict)
+  bot       Bot      @relation(fields: [botId], references: [id], onDelete: Restrict)
+
+  @@unique([teamId, botId])
+  @@index([botId])
+}
+
+model ProjectScan {
+  id             String              @id @default(cuid())
+  projectId      String
+  accountLogin   String
+  repository     String
+  branch         String
+  commitSha      String
+  lifecycleStage ProjectProgressStage
+  filesScanned   Int
+  sourceFiles    Int
+  testFiles      Int
+  openItems      Int
+  taskCounts     Json                @db.JsonB
+  technologies   String[]
+  evidenceFiles  String[]
+  treeTruncated  Boolean             @default(false)
+  summary        String              @db.Text
+  scannedAt      DateTime            @default(now()) @db.Timestamptz(6)
+  project        Project             @relation(fields: [projectId], references: [id], onDelete: Restrict)
+
+  @@index([projectId, scannedAt])
+  @@index([repository, scannedAt])
+}
+
+model ProjectTask {
+  id          String            @id @default(cuid())
+  projectId   String
+  userId      String
+  title       String
+  description String            @default("") @db.Text
+  status      ProjectTaskStatus @default(TODO)
+  createdAt   DateTime          @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime          @updatedAt @db.Timestamptz(6)
+  project     Project           @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  user        User              @relation(fields: [userId], references: [id], onDelete: Restrict)
+  prerequisites TaskDependency[] @relation("TaskPrerequisites")
+  dependents    TaskDependency[] @relation("TaskDependents")
+
+  @@index([projectId, status, updatedAt])
+  @@index([userId, updatedAt])
+}
+
+model ProjectMessage {
+  id           String   @id @default(cuid())
+  projectId    String
+  authorUserId String
+  content      String   @db.Text
+  createdAt    DateTime @default(now()) @db.Timestamptz(6)
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  author       User     @relation(fields: [authorUserId], references: [id], onDelete: Restrict)
+
+  @@index([projectId, createdAt])
+  @@index([authorUserId, createdAt])
+}
+
+model ProjectHelpRequest {
+  id           String                   @id @default(cuid())
+  projectId    String
+  authorUserId String
+  title        String
+  description  String                   @default("") @db.Text
+  status       ProjectHelpRequestStatus @default(OPEN)
+  createdAt    DateTime                 @default(now()) @db.Timestamptz(6)
+  resolvedAt   DateTime?                @db.Timestamptz(6)
+  project      Project                  @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  author       User                     @relation(fields: [authorUserId], references: [id], onDelete: Restrict)
+
+  @@index([projectId, status, createdAt])
+  @@index([authorUserId, createdAt])
+}
+
+model ProjectCheckpoint {
+  id             String                @id @default(cuid())
+  projectId      String
+  authorUserId   String
+  title          String
+  notes          String                @default("") @db.Text
+  commitSha      String?
+  progressStage  ProjectProgressStage?
+  createdAt      DateTime              @default(now()) @db.Timestamptz(6)
+  project        Project               @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  author         User                  @relation(fields: [authorUserId], references: [id], onDelete: Restrict)
+
+  @@index([projectId, createdAt])
+  @@index([authorUserId, createdAt])
+}
+
+model TaskDependency {
+  id              String      @id @default(cuid())
+  taskId          String
+  dependsOnTaskId String
+  createdAt       DateTime    @default(now()) @db.Timestamptz(6)
+  task            ProjectTask @relation("TaskPrerequisites", fields: [taskId], references: [id], onDelete: Restrict)
+  dependsOn       ProjectTask @relation("TaskDependents", fields: [dependsOnTaskId], references: [id], onDelete: Restrict)
+
+  @@unique([taskId, dependsOnTaskId])
+  @@index([dependsOnTaskId])
+}
+
+model Document {
+  id              String            @id @default(cuid())
+  projectId       String
+  filename        String
+  currentVersion  Int               @default(1)
+  createdAt       DateTime          @default(now()) @db.Timestamptz(6)
+  updatedAt       DateTime          @updatedAt @db.Timestamptz(6)
+  deletedAt       DateTime?         @db.Timestamptz(6)
+  project         Project           @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  versions        DocumentVersion[]
+
+  @@index([projectId, deletedAt, updatedAt])
+}
+
+model DocumentVersion {
+  id                String   @id @default(cuid())
+  documentId        String
+  uploadedById      String
+  version           Int
+  contentHash       String
+  sizeBytes         Int
+  pageCount         Int
+  encryptedContent  String   @db.Text
+  extractedText     String   @db.Text
+  createdAt         DateTime @default(now()) @db.Timestamptz(6)
+  document          Document @relation(fields: [documentId], references: [id], onDelete: Restrict)
+  uploadedBy        User     @relation(fields: [uploadedById], references: [id], onDelete: Restrict)
+
+  @@unique([documentId, version])
+  @@index([uploadedById, createdAt])
 }
 
 model Stage {
@@ -219,6 +427,7 @@ model PullRequest {
   updatedAt            DateTime           @updatedAt @db.Timestamptz(6)
   stage                Stage              @relation(fields: [stageId], references: [id], onDelete: Restrict)
   comments             PullRequestComment[]
+  evidence             ReviewEvidence[]
 
   @@unique([repository, number])
   @@index([stageId, status])
@@ -314,4 +523,71 @@ model AuditEvent {
 
   @@index([userId, createdAt])
   @@index([targetType, targetId, createdAt])
+}
+enum ReviewEvidenceKind {
+  MANUAL_TEST
+  PREVIEW
+}
+
+enum ReviewEvidenceResult {
+  PASSED
+  FAILED
+}
+
+enum CostCategory {
+  USAGE
+  SUBSCRIPTION
+}
+
+model ReviewEvidence {
+  id            String               @id @default(cuid())
+  pullRequestId String
+  userId        String
+  commitSha     String
+  kind          ReviewEvidenceKind
+  result        ReviewEvidenceResult
+  note          String               @db.Text
+  url           String?
+  createdAt     DateTime             @default(now()) @db.Timestamptz(6)
+  pullRequest   PullRequest          @relation(fields: [pullRequestId], references: [id], onDelete: Cascade)
+  user          User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([pullRequestId, commitSha, kind])
+}
+
+model WorkSchedule {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  enabled   Boolean  @default(false)
+  timezone  String   @default("UTC")
+  windows   Json     @db.JsonB
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model CostBudget {
+  id                String   @id @default(cuid())
+  userId            String   @unique
+  monthlyLimitMinor Int
+  currency          String   @db.VarChar(3)
+  enforce           Boolean  @default(false)
+  createdAt         DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt         DateTime @updatedAt @db.Timestamptz(6)
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model CostEntry {
+  id          String       @id @default(cuid())
+  userId      String
+  occurredOn  DateTime     @db.Date
+  category    CostCategory
+  amountMinor Int
+  currency    String       @db.VarChar(3)
+  description String
+  source      String
+  createdAt   DateTime     @default(now()) @db.Timestamptz(6)
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, occurredOn])
 }

@@ -1,6 +1,47 @@
 # Stan projektu
 
-Ostatnia aktualizacja: 2026-10-23
+Ostatnia aktualizacja: 2026-10-26
+
+## Przyrost 2026-10-26 — projekty, skanowanie, zespoły i współpraca
+
+- Dodano lokalną implementację projektów oraz wersjonowanych dokumentów PDF:
+  dostęp właściciela, upload do 10 MiB, szyfrowanie AES-256-GCM, ekstrakcję
+  tekstu przez `pdftotext`, pobieranie jako załącznik i miękkie usuwanie.
+- Dodano „Skanuj postęp projektu”: analiza struktury i technologii repozytorium
+  GitHub oraz markerów `[DONE]`, `[IN_PROGRESS]`, `[BLOCKED]`, `[TODO]` w
+  dokumentacji postępu, zapisywana z SHA i wykrytym szacunkowym etapem.
+- Do promptu Copilot trafia najnowszy skan dla repozytorium i aktualny stan
+  etapów danego bota z bazy. Skan jest oznaczony jako snapshot/fakty, nie
+  instrukcje; bez dokumentu postępu etap ma wartość „rozpoznanie”.
+- Dodano interfejs tworzenia projektów, wgrywania i przeglądania wersji PDF oraz
+  mobilny dolny pasek nawigacji z dostępem do wszystkich 15 sekcji.
+- Dodano trwałe zespoły, przypisywanie botów należących do tego samego
+  użytkownika oraz zadania projektowe z zależnościami. Backend odrzuca cykle
+  i blokuje rozpoczęcie lub ukończenie zadania z niezakończonymi
+  poprzednikami; UI pokazuje zespoły, boty i status zależności.
+- Dodano projektowy dziennik wiadomości, prośby o pomoc z rozwiązywaniem oraz
+  ręcznie zapisywane notatki checkpoint. Nie są to wiadomości wysyłane przez
+  agenty ani checkpoint runtime'u i nie pozwalają wznowić zadania; GitHub
+  Agent Tasks API nie udostępnia takiego sterowania.
+- Backend: `npm test` 48/48, `tsc --noEmit`, walidacja schematu Prisma i
+  `git diff --check` przechodzą. Flutter: `flutter test` 11/11 i
+  `flutter analyze` bez uwag. Najnowszy release build Web został przerwany
+  przez system (`dart2js` exit -9) przy ograniczonej pamięci hosta; build
+  produkcyjny po zmianach UI nie jest jeszcze zweryfikowany.
+- Migracja nie została zastosowana na stagingu, a staging nie zawiera tego
+  przyrostu. Przed wdrożeniem wymagane są świeży backup i test odtworzenia.
+  Produkcja nie była zmieniana. Świeży backup stagingu został wykonany i
+  zweryfikowany testem odtworzenia do izolowanej bazy:
+  `backups/staging/postgres-20261026T111644.201227208Z.dump`. Dodano lokalnie
+  (migracja `20261026120000_schedules_costs_evidence`, jeszcze nie na stagingu):
+  harmonogram okien pracy blokujący start etapu, import kosztów z CSV z limitem
+  zużycia oraz zatwierdzanie etapu po zweryfikowanym przez serwer CI (GitHub
+  check-runs dla aktualnego SHA) i zaliczonym teście manualnym przypiętym do SHA.
+  Brak: izolowane preview (nie jest wymuszane), automatyczne rozliczenia,
+  współpraca agent-agent i checkpointy runtime. Budowa obrazu
+  Docker jest zablokowana brakiem dostępu użytkownika do `/var/run/docker.sock`.
+- Zmiany pozostają niezacommitowane. Nie wykonano push; pełna zgodność z PDF
+  nie jest jeszcze osiągnięta.
 
 ## Wynik
 
@@ -15,10 +56,10 @@ Ostatnia aktualizacja: 2026-10-23
 ## Ukończone i weryfikacja
 
 - Analiza początkowego repozytorium, narzędzi, skonfigurowanego aliasu SSH i publicznego zakresu REST GitHuba.
-- Backend TypeScript/Fastify: `npm exec -- tsc --noEmit`, bez błędów; `npm test`, 37/37 testów zaliczonych, w tym preflight Codespaces, rejestracja, Origin/CSRF i odrzucenie obcego hosta.
-- Flutter: 7/7 testów zaliczonych; `flutter analyze` bez uwag; release build Web zbudowany.
-- Nawigacja ma wszystkie 15 pozycji z PDF. Widoki GitHub, botów, zadań, PR, review i edytora korzystają z istniejącego API; brakujące backendy zespołów, PDF, współpracy, CI/CD/preview, harmonogramów i rozliczeń są jawnie oznaczone.
-- Zatwierdzenie etapu jest blokowane po stronie UI i API, dopóki serwer nie weryfikuje CI, deploymentu preview przypiętego do SHA, testów manualnych i uprawnień recenzenta.
+- Backend TypeScript/Fastify: `npm exec -- tsc --noEmit`, bez błędów; pierwotny baseline miał 37/37 testów. Przyrost projektów/PDF i skanowania zwiększył zestaw do 43/43, zespołów i DAG zadań do 46/46, a współpracy projektowej do 48/48.
+- Flutter: aktualny zestaw 11/11 testów zaliczony i `flutter analyze` bez uwag. Poprzedni release build Web przeszedł przed ostatnim przyrostem zespołów, zadań i współpracy; ponowny build po tych zmianach został przerwany przez limit pamięci hosta.
+- Nawigacja ma wszystkie 15 pozycji z PDF. Projekty/PDF, skan postępu, zespoły, zadania z zależnościami oraz dziennik/prośby o pomoc/ręczne notatki checkpoint mają lokalne API/UI. Współpraca agent-agent, CI/CD/preview, harmonogramy i rozliczenia nadal są brakami.
+- Zatwierdzenie etapu jest dozwolone tylko, gdy serwer potwierdzi zielone CI dla aktualnego SHA PR i zaliczony test manualny przypięty do tego SHA. Preview i osobne uprawnienia recenzenta nie są jeszcze wymuszane (właściciel bota jest jedynym recenzentem).
 - Commit `1857a47` wdrożono na istniejącym hostingu staging. Strona i `/health/ready` zwracają HTTP 200; kontenery API, PostgreSQL i Caddy są zdrowe. Edytor code-server działa na prywatnej sieci; jego upstream zwraca HTTP 200, a publiczny URL bez sesji HTTP 401. Caddy poprawnie uzyskał certyfikat TLS dla domeny edytora.
 - Logowanie akceptuje istniejące hasła krótsze niż minimalne 12 znaków wymagane przy rejestracji; poprawka wdrożona na stagingu jako `c112795`.
 - Backup stagingu `backups/staging/postgres-20261023T075448.114430245Z.dump` zweryfikowano i odtworzono do osobnej bazy `ccc_restore_20261023075822` (3 migracje); istniejąca baza nie była nadpisywana.

@@ -248,6 +248,30 @@ class _StageCardState extends ConsumerState<_StageCard> {
     }
   }
 
+  Future<void> _recordManualTest(String pullRequestId) async {
+    final result = await showDialog<Map<String, String>>(
+      context: context,
+      builder: (context) => const _ManualTestDialog(),
+    );
+    if (result == null) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await ref.read(apiClientProvider).request(
+        '/pull-requests/$pullRequestId/evidence',
+        method: 'POST',
+        data: {'kind': 'MANUAL_TEST', ...result},
+      );
+      if (mounted) widget.onRefresh();
+    } on Object catch (error) {
+      if (mounted) setState(() => _error = error.toString());
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   Future<void> _requestChanges() async {
     final reason = await showDialog<String>(
       context: context,
@@ -333,13 +357,23 @@ class _StageCardState extends ConsumerState<_StageCard> {
             const Divider(height: 28),
             Wrap(spacing: 8, runSpacing: 8, children: [
               Tooltip(
-                message: 'Wymagane są zielone CI, aktualne preview i zapisane testy manualne.',
+                message: 'Serwer sprawdzi zielone CI i zaliczony test manualny dla aktualnego commita.',
                 child: FilledButton.icon(
-                  onPressed: null,
-                  icon: Icon(Icons.check_rounded),
-                  label: Text('Zatwierdź etap'),
+                  onPressed: _busy ? null : () => _perform('approve'),
+                  icon: const Icon(Icons.check_rounded),
+                  label: const Text('Zatwierdź etap'),
                 ),
               ),
+              if (pullRequests.isNotEmpty)
+                OutlinedButton.icon(
+                  onPressed: _busy
+                      ? null
+                      : () => _recordManualTest(
+                            (pullRequests.whereType<Map>().first)['id'].toString(),
+                          ),
+                  icon: const Icon(Icons.rule_rounded),
+                  label: const Text('Zapisz test manualny'),
+                ),
               Tooltip(
                 message: 'Preview CI/CD nie jest skonfigurowane dla tego etapu.',
                 child: OutlinedButton.icon(
@@ -371,7 +405,7 @@ class _StageCardState extends ConsumerState<_StageCard> {
             ]),
             const SizedBox(height: 9),
             const Text(
-                'Akceptacja jest zablokowana, dopóki serwer nie potwierdzi CI, aktualnego preview i testów. Prośba o poprawki zapisuje uwagi; ponowne zadanie uruchomisz po ich sprawdzeniu.',
+                'Akceptacja wymaga, by serwer potwierdził zielone CI oraz zaliczony test manualny dla aktualnego commita PR. Preview nie jest jeszcze wymuszane. Prośba o poprawki zapisuje uwagi; ponowne zadanie uruchomisz po ich sprawdzeniu.',
                 style: TextStyle(color: AppColors.muted, fontSize: 11)),
           ],
           if (status == 'RUNNING') ...[
@@ -450,6 +484,58 @@ class _StageCardState extends ConsumerState<_StageCard> {
     );
   }
 
+}
+
+class _ManualTestDialog extends StatefulWidget {
+  const _ManualTestDialog();
+
+  @override
+  State<_ManualTestDialog> createState() => _ManualTestDialogState();
+}
+
+class _ManualTestDialogState extends State<_ManualTestDialog> {
+  final controller = TextEditingController();
+  String result = 'PASSED';
+
+  @override
+  void dispose() {
+    controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+        title: const Text('Test manualny aktualnego commita'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SegmentedButton<String>(
+              segments: const [
+                ButtonSegment(value: 'PASSED', label: Text('Zaliczony')),
+                ButtonSegment(value: 'FAILED', label: Text('Niezaliczony')),
+              ],
+              selected: {result},
+              onSelectionChanged: (value) => setState(() => result = value.first),
+            ),
+            TextField(
+              controller: controller,
+              minLines: 2,
+              maxLines: 5,
+              onChanged: (_) => setState(() {}),
+              decoration: const InputDecoration(labelText: 'Co przetestowano (min. 3 znaki)'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Anuluj')),
+          FilledButton(
+            onPressed: controller.text.trim().length < 3
+                ? null
+                : () => Navigator.pop(context, {'result': result, 'note': controller.text.trim()}),
+            child: const Text('Zapisz'),
+          ),
+        ],
+      );
 }
 
 class _ReasonDialog extends StatefulWidget {

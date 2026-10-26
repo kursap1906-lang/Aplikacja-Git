@@ -65,15 +65,36 @@ repozytoriów, etapów, pull requestów, Review Center, kont GitHub, powiadomie�
 i Code Center korzystają z istniejących danych API. Konto GitHub musi być
 połączone, a edytor otwiera osobny, autoryzowany workspace na obecnym hostingu.
 
-Zespoły, trwałe projekty/PDF, współpraca agentów, izolowane runner-y CI/CD,
-preview PR, harmonogramy i koszty wymagają dodatkowych modeli lub usług.
-Interfejs informuje o ich braku; nie zapisuje pozornie formularzy, nie pokazuje
-fikcyjnych kosztów i nie udaje, że uruchomił preview.
+Ekran „Projekty i PDF” pozwala utworzyć projekt, przechowywać wersje PDF,
+szyfrować pliki, wyodrębniać tekst przez `pdftotext`, przeglądać tekst i pobierać
+wersje jako załączniki. Upload jest ograniczony do 10 MiB. Wymaga trwałej bazy
+PostgreSQL, skonfigurowanego `APP_ENCRYPTION_KEY` i `pdftotext` (jest w obrazie
+Docker). „Skanuj postęp projektu” analizuje wskazane repozytorium GitHub na
+konkretnym SHA, wykrywa strukturę, technologie i markery statusu w dokumentach
+postępu, zapisuje raport i dołącza najnowszy wynik do zadań Copilot tego samego
+repozytorium. Etap jest szacunkiem opartym na jawnych dowodach (np. `[DONE]`,
+`[IN_PROGRESS]`, `[BLOCKED]`, `[TODO]`), nie swobodną deklaracją AI; brak
+dokumentów postępu daje etap „rozpoznanie”. Treści z repozytorium są przekazywane
+botom wyłącznie jako niezaufane fakty, nie jako instrukcje. Skan repozytorium
+jest osobną funkcją od odczytu PDF. Migracja i test end-to-end na stagingu są
+jeszcze do wykonania.
 
-Zatwierdzenie etapu jest zablokowane również po stronie API do czasu, aż serwer
-będzie przechowywał i weryfikował zielone CI, aktualny deployment przypięty do
-commit SHA, testy manualne oraz uprawnienia recenzenta. Sam status etapu lub
-kliknięcie w przeglądarce nie stanowią dowodu akceptacji. Zmiany kodu nadal
+Zespoły i przypisywanie botów, projektowe zadania z zależnościami oraz
+projektowy dziennik/prośby o pomoc/ręczne checkpointy mają lokalną
+implementację API/UI; migracje stagingowe i smoke testy są jeszcze wymagane.
+Wiadomości nie są dostarczane agentom, a ręczne notatki checkpoint nie zapisują
+stanu runtime ani nie wznawiają zadań. Izolowane runner-y CI/CD, preview PR,
+automatyczne rozliczenia nadal wymagają implementacji. Harmonogram okien pracy
+i limit zużycia z importu CSV są sprawdzane po stronie serwera przy starcie
+etapu. Interfejs nie pokazuje fikcyjnych kosztów i nie udaje, że uruchomił
+preview.
+
+Zatwierdzenie etapu wymaga po stronie API zielonego CI (GitHub check-runs)
+dla aktualnego commit SHA otwartego PR oraz zaliczonego testu manualnego
+zapisanego dla tego samego SHA (`POST /api/pull-requests/:id/evidence`,
+`GET /api/stages/:id/approval-readiness`). Preview nie jest jeszcze
+wymuszane, a recenzentem jest właściciel bota. Sam status etapu lub kliknięcie
+w przeglądarce nie stanowią dowodu akceptacji. Zmiany kodu nadal
 publikujemy do repozytorium GitHub, a aplikacja pozostaje na obecnym hostingu.
 
 ## GitHub Copilot coding agent

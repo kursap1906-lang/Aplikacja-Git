@@ -8,7 +8,7 @@ import { parseConfig } from './config.ts';
 import type { PrismaClient } from './generated/prisma/client.ts';
 import { copilotCapabilities, type CopilotTaskRequest } from './github/copilot-provider.ts';
 import { hashPassword } from './security/passwords.ts';
-import { encryptSecret, hashToken } from './security/secrets.ts';
+import { decryptSecret, encryptSecret, hashToken } from './security/secrets.ts';
 
 function testConfig() {
   return parseConfig({
@@ -163,6 +163,9 @@ test('registers a local account with a normalized email and hashed credentials',
   let createdUser: Record<string, unknown> | undefined;
   let createdSession: Record<string, unknown> | undefined;
   const transaction = {
+    workSchedule: { findUnique: async () => null },
+    costBudget: { findUnique: async () => null },
+    costEntry: { aggregate: async () => ({ _sum: { amountMinor: 0 } }) },
     user: {
       create: async ({ data }: { data: Record<string, unknown> }) => {
         createdUser = data;
@@ -194,7 +197,7 @@ test('registers a local account with a normalized email and hashed credentials',
     },
   });
 
-  assert.equal(response.statusCode, 201);
+  assert.equal(response.statusCode, 201, response.body);
   assert.equal(createdUser?.email, 'new.user@example.com');
   assert.match(String(createdUser?.passwordHash), /^\$scrypt\$v1\$/);
   assert.notEqual(createdUser?.passwordHash, 'correct horse battery staple');
@@ -218,10 +221,537 @@ test('rejects weak local registration passwords', async (context) => {
   assert.equal(response.json().error.code, 'INVALID_REQUEST');
 });
 
+test('stores encrypted PDF versions, extracts text, and only serves project documents to their owner', async (context) => {
+  const key = testConfig().APP_ENCRYPTION_KEY!;
+  const projectId = `c${'1'.repeat(24)}`;
+  type TestDocument = { id: string; projectId: string; filename: string; currentVersion: number };
+  type TestDocumentVersion = {
+    id: string;
+    documentId: string;
+    uploadedById: string;
+    version: number;
+    contentHash: string;
+    sizeBytes: number;
+    pageCount: number;
+    encryptedContent: string;
+    extractedText: string;
+    createdAt: Date;
+  };
+  let currentDocument: TestDocument | undefined;
+  const documentVersions: TestDocumentVersion[] = [];
+  const prisma = makePrisma('csrf-secret', {
+    project: {
+      create: async ({ data }: { data: Record<string, unknown> }) => ({
+        id: projectId,
+        ...data,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }),
+      findFirst: async ({ where }: { where: { id: string; userId: string } }) =>
+        where.id === projectId && where.userId === 'user-id' ? { id: projectId } : null,
+    },
+    documentVersion: {
+      findFirst: async ({ where }: {
+        where: {
+          documentId: string;
+          version: number;
+          document: { project: { userId: string } };
+        };
+      }) => {
+        if (where.document.project.userId !== 'user-id' || currentDocument?.id !== where.documentId) {
+          return null;
+        }
+        const version = documentVersions.find((candidate) =>
+          candidate.documentId === where.documentId && candidate.version === where.version);
+        return version ? { ...version, document: { filename: currentDocument.filename } } : null;
+      },
+    },
+    auditEvent: { create: async () => ({ id: 'audit-id' }) },
+  });
+  const transaction = {
+    workSchedule: { findUnique: async () => null },
+    costBudget: { findUnique: async () => null },
+    costEntry: { aggregate: async () => ({ _sum: { amountMinor: 0 } }) },
+    document: {
+      findFirst: async () => currentDocument ?? null,
+      create: async ({ data }: { data: Record<string, unknown> }) => {
+        currentDocument = {
+          id: `c${'2'.repeat(24)}`,
+          projectId: String(data.projectId),
+          filename: String(data.filename),
+          currentVersion: 1,
+        };
+        return currentDocument;
+      },
+      updateMany: async ({ where, data }: {
+        where: { id: string; currentVersion: number };
+        data: { currentVersion: number };
+      }) => {
+        if (currentDocument?.id !== where.id || currentDocument.currentVersion !== where.currentVersion) {
+          return { count: 0 };
+        }
+        currentDocument.currentVersion = data.currentVersion;
+        return { count: 1 };
+      },
+    },
+    documentVersion: {
+      create: async ({ data }: { data: Omit<TestDocumentVersion, 'id' | 'createdAt'> }) => {
+        const version: TestDocumentVersion = {
+          id: `version-${data.version}`,
+          ...data,
+          createdAt: new Date(),
+        };
+        documentVersions.push(version);
+        return {
+          id: version.id,
+          version: version.version,
+          contentHash: version.contentHash,
+          sizeBytes: version.sizeBytes,
+          pageCount: version.pageCount,
+          createdAt: version.createdAt,
+        };
+      },
+      findFirst: async ({ where }: { where: { documentId: string; version: number } }) => {
+        const version = documentVersions.find(
+          (candidate) => candidate.documentId === where.documentId && candidate.version === where.version,
+        );
+        return version && currentDocument
+          ? { ...version, document: { filename: currentDocument.filename } }
+          : null;
+      },
+    },
+    auditEvent: { create: async () => ({ id: 'audit-id' }) },
+  };
+  Object.assign(prisma, { $transaction: async (callback: (client: typeof transaction) => Promise<unknown>) => callback(transaction) });
+  const app = createApp({
+    prisma,
+    config: testConfig(),
+    pdfExtractor: async () => ({ text: 'Project requirement, page one.', pageCount: 1 }),
+  });
+  context.after(() => app.close());
+  const headers = { authorization: 'Bearer test-session-token', 'x-csrf-token': 'csrf-secret' };
+  const created = await app.inject({
+    method: 'POST',
+    url: '/api/projects',
+    headers: { ...headers, 'content-type': 'application/json' },
+    payload: { name: 'PDF project', description: 'Requirements', repository: 'owner/repo' },
+  });
+  assert.equal(created.statusCode, 201);
+  assert.equal(created.json().project.id, projectId);
+
+  const pdf = Buffer.from('%PDF-1.7\\nprivate document content\\n%%EOF');
+  const firstUpload = await app.inject({
+    method: 'POST',
+    url: `/api/projects/${projectId}/documents?filename=requirements.pdf`,
+    headers: { ...headers, 'content-type': 'application/pdf' },
+    payload: pdf,
+  });
+  assert.equal(firstUpload.statusCode, 201);
+  assert.equal(firstUpload.json().document.version, 1);
+  assert.equal(documentVersions.length, 1);
+  assert.notEqual(documentVersions[0].encryptedContent, pdf.toString('base64'));
+  assert.deepEqual(
+    Buffer.from(decryptSecret(documentVersions[0].encryptedContent, key), 'base64'),
+    pdf,
+  );
+
+  const secondUpload = await app.inject({
+    method: 'POST',
+    url: `/api/projects/${projectId}/documents?filename=requirements.pdf`,
+    headers: { ...headers, 'content-type': 'application/pdf' },
+    payload: pdf,
+  });
+  assert.equal(secondUpload.statusCode, 201);
+  assert.equal(secondUpload.json().document.version, 2);
+
+  const textVersion = await app.inject({
+    method: 'GET',
+    url: `/api/documents/${currentDocument!.id}/versions/1`,
+    headers: { authorization: 'Bearer test-session-token' },
+  });
+  assert.equal(textVersion.statusCode, 200);
+  assert.equal(textVersion.json().document.extractedText, 'Project requirement, page one.');
+
+  const download = await app.inject({
+    method: 'GET',
+    url: `/api/documents/${currentDocument!.id}/versions/1/download`,
+    headers: { authorization: 'Bearer test-session-token' },
+  });
+  assert.equal(download.statusCode, 200);
+  assert.match(download.headers['content-disposition']?.toString() ?? '', /requirements\.pdf/);
+  assert.deepEqual(download.rawPayload, pdf);
+
+  const invalidPdf = await app.inject({
+    method: 'POST',
+    url: `/api/projects/${projectId}/documents?filename=bad.pdf`,
+    headers: { ...headers, 'content-type': 'application/pdf' },
+    payload: Buffer.from('not a PDF'),
+  });
+  assert.equal(invalidPdf.statusCode, 415);
+  assert.equal(invalidPdf.json().error.code, 'PDF_INVALID');
+
+  const privateProject = await app.inject({
+    method: 'POST',
+    url: `/api/projects/c${'3'.repeat(24)}/documents?filename=private.pdf`,
+    headers: { ...headers, 'content-type': 'application/pdf' },
+    payload: pdf,
+  });
+  assert.equal(privateProject.statusCode, 404);
+  assert.equal(privateProject.json().error.code, 'PROJECT_NOT_FOUND');
+});
+
+test('scans an owned GitHub project and stores pinned progress evidence', async (context) => {
+  const config = testConfig();
+  const commitSha = 'a'.repeat(40);
+  let savedScan: Record<string, unknown> | undefined;
+  const progressText = Buffer.from('- [DONE] Authentication\n- [IN_PROGRESS] Project scan').toString('base64');
+  const prisma = makePrisma('csrf-secret', {
+    project: {
+      findFirst: async ({ where }: { where: { id: string; userId: string } }) =>
+        where.id === `c${'1'.repeat(24)}` && where.userId === 'user-id'
+          ? { id: where.id, name: 'Project', repository: 'owner/repository' }
+          : null,
+    },
+    gitHubAccount: {
+      findFirst: async ({ where }: { where: { id: string; userId: string } }) =>
+        where.id === `c${'2'.repeat(24)}` && where.userId === 'user-id'
+          ? {
+              id: where.id,
+              login: 'owner',
+              status: 'ACTIVE',
+              tokenExpiresAt: null,
+              encryptedAccessToken: encryptSecret('scan-token', config.APP_ENCRYPTION_KEY!),
+            }
+          : null,
+    },
+    projectScan: {
+      create: async ({ data }: { data: Record<string, unknown> }) => {
+        savedScan = data;
+        return { id: 'scan-id', ...data, scannedAt: new Date() };
+      },
+    },
+    auditEvent: { create: async () => ({ id: 'audit-id' }) },
+  });
+  const fetcher: typeof fetch = async (input) => {
+    const url = String(input);
+    if (url.endsWith('/repos/owner/repository')) {
+      return Response.json({
+        full_name: 'owner/repository',
+        default_branch: 'main',
+        open_issues_count: 2,
+      });
+    }
+    if (url.endsWith('/commits?per_page=1')) return Response.json([{ sha: commitSha }]);
+    if (url.endsWith(`/git/trees/${commitSha}?recursive=1`)) {
+      return Response.json({
+        truncated: false,
+        tree: [
+          { path: 'TASKS.md', type: 'blob', size: 48 },
+          { path: 'src/main.ts', type: 'blob', size: 20 },
+          { path: 'tests/main.test.ts', type: 'blob', size: 20 },
+        ],
+      });
+    }
+    if (url.endsWith(`/contents/TASKS.md?ref=${commitSha}`)) {
+      return Response.json({
+        type: 'file',
+        encoding: 'base64',
+        content: progressText,
+        size: 48,
+      });
+    }
+    throw new Error(`Unexpected GitHub API request: ${url}`);
+  };
+  const app = createApp({ prisma, config, fetcher });
+  context.after(() => app.close());
+
+  const response = await app.inject({
+    method: 'POST',
+    url: `/api/projects/c${'1'.repeat(24)}/scan`,
+    headers: {
+      authorization: 'Bearer project-scan-session',
+      'x-csrf-token': 'csrf-secret',
+    },
+    payload: { githubAccountId: `c${'2'.repeat(24)}` },
+  });
+
+  assert.equal(response.statusCode, 201, response.body);
+  assert.equal(response.json().scan.lifecycleStage, 'IMPLEMENTATION');
+  assert.equal(response.json().scan.commitSha, commitSha);
+  assert.equal(savedScan?.accountLogin, 'owner');
+  assert.equal(savedScan?.repository, 'owner/repository');
+  assert.deepEqual(savedScan?.taskCounts, { done: 1, inProgress: 1, blocked: 0, todo: 0 });
+});
+
+test('does not start or complete project tasks while prerequisites remain open', async (context) => {
+  const taskId = `c${'4'.repeat(24)}`;
+  let updateCalled = false;
+  const transaction = {
+    workSchedule: { findUnique: async () => null },
+    costBudget: { findUnique: async () => null },
+    costEntry: { aggregate: async () => ({ _sum: { amountMinor: 0 } }) },
+    projectTask: {
+      findFirst: async () => ({
+        id: taskId,
+        prerequisites: [{ dependsOn: { id: `c${'5'.repeat(24)}`, title: 'Prerequisite', status: 'IN_PROGRESS' } }],
+      }),
+      update: async () => {
+        updateCalled = true;
+        return { id: taskId, status: 'IN_PROGRESS' };
+      },
+    },
+    auditEvent: { create: async () => ({ id: 'audit-id' }) },
+  };
+  const app = createApp({
+    prisma: makePrisma('csrf-secret', {
+      $transaction: async (callback: (value: typeof transaction) => Promise<unknown>) =>
+        callback(transaction),
+    }),
+    config: testConfig(),
+  });
+  context.after(() => app.close());
+
+  const response = await app.inject({
+    method: 'PATCH',
+    url: `/api/tasks/${taskId}`,
+    headers: {
+      authorization: 'Bearer project-task-session',
+      'x-csrf-token': 'csrf-secret',
+    },
+    payload: { status: 'IN_PROGRESS' },
+  });
+
+  assert.equal(response.statusCode, 409);
+  assert.equal(response.json().error.code, 'TASK_DEPENDENCIES_UNMET');
+  assert.equal(updateCalled, false);
+});
+
+test('rejects a project task dependency update that would form a cycle', async (context) => {
+  const taskId = `c${'4'.repeat(24)}`;
+  const dependencyId = `c${'5'.repeat(24)}`;
+  let dependenciesDeleted = false;
+  const transaction = {
+    workSchedule: { findUnique: async () => null },
+    costBudget: { findUnique: async () => null },
+    costEntry: { aggregate: async () => ({ _sum: { amountMinor: 0 } }) },
+    projectTask: {
+      findFirst: async () => ({ id: taskId, projectId: 'project-id' }),
+      findMany: async () => [{ id: dependencyId }],
+    },
+    taskDependency: {
+      findMany: async () => [{ taskId: dependencyId, dependsOnTaskId: taskId }],
+      deleteMany: async () => {
+        dependenciesDeleted = true;
+        return { count: 1 };
+      },
+      createMany: async () => ({ count: 1 }),
+    },
+    auditEvent: { create: async () => ({ id: 'audit-id' }) },
+  };
+  const app = createApp({
+    prisma: makePrisma('csrf-secret', {
+      $transaction: async (callback: (value: typeof transaction) => Promise<unknown>) =>
+        callback(transaction),
+    }),
+    config: testConfig(),
+  });
+  context.after(() => app.close());
+
+  const response = await app.inject({
+    method: 'PUT',
+    url: `/api/tasks/${taskId}/dependencies`,
+    headers: {
+      authorization: 'Bearer project-task-session',
+      'x-csrf-token': 'csrf-secret',
+    },
+    payload: { dependencyIds: [dependencyId] },
+  });
+
+  assert.equal(response.statusCode, 409);
+  assert.equal(response.json().error.code, 'TASK_DEPENDENCY_CYCLE');
+  assert.equal(dependenciesDeleted, false);
+});
+
+test('creates a user-owned team and assigns only a bot owned by the same user', async (context) => {
+  let createdTeam: Record<string, unknown> | undefined;
+  let assignedBot: Record<string, unknown> | undefined;
+  const prisma = makePrisma('csrf-secret', {
+    team: {
+      create: async ({ data }: { data: Record<string, unknown> }) => {
+        createdTeam = data;
+        return { id: `c${'6'.repeat(24)}`, ...data };
+      },
+      findFirst: async () => ({ id: `c${'6'.repeat(24)}` }),
+    },
+    bot: {
+      findFirst: async () => ({ id: `c${'7'.repeat(24)}` }),
+    },
+    teamBot: {
+      create: async ({ data }: { data: Record<string, unknown> }) => {
+        assignedBot = data;
+        return { id: 'membership-id', ...data };
+      },
+    },
+    auditEvent: { create: async () => ({ id: 'audit-id' }) },
+  });
+  const app = createApp({ prisma, config: testConfig() });
+  context.after(() => app.close());
+
+  const headers = {
+    authorization: 'Bearer teams-session',
+    'x-csrf-token': 'csrf-secret',
+  };
+  const created = await app.inject({
+    method: 'POST',
+    url: '/api/teams',
+    headers,
+    payload: { name: 'Frontend', description: 'Web application agents' },
+  });
+  assert.equal(created.statusCode, 201);
+  assert.equal(createdTeam?.userId, 'user-id');
+  const assigned = await app.inject({
+    method: 'POST',
+    url: `/api/teams/c${'6'.repeat(24)}/bots`,
+    headers,
+    payload: { botId: `c${'7'.repeat(24)}` },
+  });
+  assert.equal(assigned.statusCode, 201);
+  assert.deepEqual(assignedBot, {
+    teamId: `c${'6'.repeat(24)}`,
+    botId: `c${'7'.repeat(24)}`,
+  });
+});
+
+test('persists project collaboration messages, help requests and manual checkpoints', async (context) => {
+  const projectId = `c${'8'.repeat(24)}`;
+  const messages: Record<string, unknown>[] = [];
+  const helpRequests: Record<string, unknown>[] = [];
+  const checkpoints: Record<string, unknown>[] = [];
+  let id = 0;
+  const nextId = () => `c${String(++id).padStart(24, '0')}`;
+  const author = { id: 'user-id', displayName: 'Project owner' };
+  const prisma = makePrisma('csrf-secret', {
+    project: {
+      findFirst: async ({ where }: { where: { id: string; userId: string } }) =>
+        where.id === projectId && where.userId === 'user-id' ? { id: projectId } : null,
+    },
+    projectMessage: {
+      create: async ({ data }: { data: Record<string, unknown> }) => {
+        const message = { id: nextId(), ...data, author };
+        messages.push(message);
+        return message;
+      },
+      findMany: async () => messages,
+    },
+    projectHelpRequest: {
+      create: async ({ data }: { data: Record<string, unknown> }) => {
+        const helpRequest = { id: nextId(), status: 'OPEN', ...data, author };
+        helpRequests.push(helpRequest);
+        return helpRequest;
+      },
+      findMany: async () => helpRequests,
+      findFirst: async ({ where }: { where: { id: string; projectId: string } }) =>
+        helpRequests.find((item) => item.id === where.id && item.projectId === where.projectId) ?? null,
+      update: async ({ where, data }: {
+        where: { id: string };
+        data: Record<string, unknown>;
+      }) => {
+        const existing = helpRequests.find((item) => item.id === where.id)!;
+        Object.assign(existing, data);
+        return existing;
+      },
+    },
+    projectCheckpoint: {
+      create: async ({ data }: { data: Record<string, unknown> }) => {
+        const checkpoint = { id: nextId(), ...data, author };
+        checkpoints.push(checkpoint);
+        return checkpoint;
+      },
+      findMany: async () => checkpoints,
+    },
+    auditEvent: { create: async () => ({ id: 'audit-id' }) },
+  });
+  const app = createApp({ prisma, config: testConfig() });
+  context.after(() => app.close());
+  const headers = {
+    authorization: 'Bearer collaboration-test-session',
+    'x-csrf-token': 'csrf-secret',
+  };
+
+  const message = await app.inject({
+    method: 'POST',
+    url: `/api/projects/${projectId}/messages`,
+    headers,
+    payload: { content: 'Review the new project plan.' },
+  });
+  assert.equal(message.statusCode, 201);
+  assert.equal(message.json().message.authorUserId, 'user-id');
+
+  const helpRequest = await app.inject({
+    method: 'POST',
+    url: `/api/projects/${projectId}/help-requests`,
+    headers,
+    payload: { title: 'Need API review', description: 'Please check the contract.' },
+  });
+  assert.equal(helpRequest.statusCode, 201);
+  const resolved = await app.inject({
+    method: 'PATCH',
+    url: `/api/projects/${projectId}/help-requests/${helpRequest.json().helpRequest.id}`,
+    headers,
+    payload: { status: 'RESOLVED' },
+  });
+  assert.equal(resolved.statusCode, 200);
+  assert.equal(resolved.json().helpRequest.status, 'RESOLVED');
+
+  const checkpoint = await app.inject({
+    method: 'POST',
+    url: `/api/projects/${projectId}/checkpoints`,
+    headers,
+    payload: {
+      title: 'Plan review',
+      notes: 'Manual progress note.',
+      commitSha: 'a'.repeat(40),
+      progressStage: 'PLANNING',
+    },
+  });
+  assert.equal(checkpoint.statusCode, 201);
+  assert.equal(checkpoint.json().checkpoint.commitSha, 'a'.repeat(40));
+
+  const history = await app.inject({
+    method: 'GET',
+    url: `/api/projects/${projectId}/collaboration`,
+    headers: { authorization: 'Bearer collaboration-test-session' },
+  });
+  assert.equal(history.statusCode, 200);
+  assert.equal(history.json().messages.length, 1);
+  assert.equal(history.json().helpRequests[0].status, 'RESOLVED');
+  assert.equal(history.json().checkpoints[0].progressStage, 'PLANNING');
+});
+
+test('does not expose collaboration records for another user project', async (context) => {
+  const prisma = makePrisma('csrf-secret', {
+    project: { findFirst: async () => null },
+  });
+  const app = createApp({ prisma, config: testConfig() });
+  context.after(() => app.close());
+
+  const response = await app.inject({
+    method: 'GET',
+    url: `/api/projects/c${'9'.repeat(24)}/collaboration`,
+    headers: { authorization: 'Bearer collaboration-test-session' },
+  });
+
+  assert.equal(response.statusCode, 404);
+  assert.equal(response.json().error.code, 'PROJECT_NOT_FOUND');
+});
+
 test('signs in with a legacy short password and case-insensitive email', async (context) => {
   const passwordHash = await hashPassword('short');
   let createdSession: Record<string, unknown> | undefined;
   const transaction = {
+    workSchedule: { findUnique: async () => null },
+    costBudget: { findUnique: async () => null },
+    costEntry: { aggregate: async () => ({ _sum: { amountMinor: 0 } }) },
     authSession: {
       create: async ({ data }: { data: Record<string, unknown> }) => {
         createdSession = data;
@@ -341,12 +871,27 @@ test('documents supported and unsupported Copilot coding-agent operations', asyn
   const response = await app.inject({ method: 'GET', url: '/api/capabilities' });
 
   assert.equal(response.statusCode, 200);
-  assert.equal(response.json().stageApproval, false);
-  assert.deepEqual(response.json().reviewEvidence, {
-    ci: false,
-    preview: false,
-    manualTests: false,
+  assert.equal(response.json().stageApproval, true);
+  assert.deepEqual(response.json().projectScanning, {
+    repositoryInventory: true,
+    progressEvidence: true,
+    commitPinned: true,
+    latestScanIncludedInCopilotTask: true,
   });
+  assert.deepEqual(response.json().projectCollaboration, {
+    messages: true,
+    helpRequests: true,
+    manualCheckpointNotes: true,
+    agentMessaging: false,
+    runtimeCheckpointResume: false,
+  });
+  assert.deepEqual(response.json().reviewEvidence, {
+    ci: true,
+    manualTests: true,
+    preview: false,
+    previewEnforced: false,
+  });
+  assert.equal(response.json().planning.automaticBilling, false);
   assert.deepEqual(response.json().copilotAgent, {
     launchTasks: true,
     readTaskStatus: true,
@@ -383,21 +928,134 @@ test('requires a valid CSRF token for authenticated stage actions', async (conte
   assert.equal(response.json().error.code, 'INVALID_CSRF_TOKEN');
 });
 
-test('blocks stage approval until server-verified review evidence is available', async (context) => {
-  const app = createApp({ prisma: makePrisma('csrf-secret'), config: testConfig() });
-  context.after(() => app.close());
+const sha = 'a'.repeat(40);
 
-  const response = await app.inject({
-    method: 'POST',
-    url: '/api/stages/clstage00000000000000000000/approve',
-    headers: {
-      authorization: 'Bearer review-test-session',
-      'x-csrf-token': 'csrf-secret',
+function approvalApp(options: { ci: string; manual: string | null; stageStatus?: string }) {
+  const config = testConfig();
+  const pullRequest = {
+    id: 'clpr0000000000000000000000',
+    stageId: 'clstage00000000000000000000',
+    repository: 'owner/repo',
+    number: 7,
+    stage: {
+      bot: { githubAccount: { status: 'ACTIVE', encryptedAccessToken: encryptSecret('tok', config.APP_ENCRYPTION_KEY!) } },
     },
+  };
+  const fetcher: typeof fetch = async (input) => {
+    const url = String(input);
+    if (url.endsWith('/pulls/7')) {
+      return Response.json({ state: 'open', head: { sha } });
+    }
+    return Response.json({ check_runs: options.ci === 'none' ? [] : [{ status: 'completed', conclusion: options.ci }] });
+  };
+  let status = options.stageStatus ?? 'WAITING_APPROVAL';
+  const transaction = {
+    stage: {
+      findFirst: async () => ({ id: 'clstage00000000000000000000', botId: 'b', number: 1, status, bot: {} }),
+      findMany: async () => [{ number: 1, status }],
+      updateMany: async ({ data }: { data: { status: string; approvedAt: Date | null } }) => {
+        status = data.status;
+        assert.ok(data.approvedAt instanceof Date);
+        return { count: 1 };
+      },
+    },
+    stageTransitionEvent: { create: async () => ({}) },
+    auditEvent: { create: async () => ({}) },
+  };
+  const prisma = makePrisma('csrf-secret', {
+    pullRequest: { findFirst: async () => pullRequest },
+    reviewEvidence: {
+      findFirst: async ({ where }: { where: { kind: string; commitSha: string } }) => (
+        where.kind === 'MANUAL_TEST' && options.manual && where.commitSha === sha
+          ? { result: options.manual }
+          : null
+      ),
+    },
+    $transaction: async (callback: (client: unknown) => Promise<unknown>) => callback(transaction),
   });
+  return { app: createApp({ prisma, config, fetcher }), getStatus: () => status };
+}
 
+const approveRequest = {
+  method: 'POST' as const,
+  url: '/api/stages/clstage00000000000000000000/approve',
+  headers: {
+    authorization: 'Bearer review-test-session',
+    'x-csrf-token': 'csrf-secret',
+  },
+};
+
+test('blocks stage approval without green CI for the exact commit', async (context) => {
+  const { app } = approvalApp({ ci: 'failure', manual: 'PASSED' });
+  context.after(() => app.close());
+  const response = await app.inject(approveRequest);
   assert.equal(response.statusCode, 409);
   assert.equal(response.json().error.code, 'REVIEW_EVIDENCE_REQUIRED');
+});
+
+test('blocks stage approval without a passed manual test bound to the head SHA', async (context) => {
+  const { app } = approvalApp({ ci: 'success', manual: null });
+  context.after(() => app.close());
+  const response = await app.inject(approveRequest);
+  assert.equal(response.statusCode, 409);
+  const failed = approvalApp({ ci: 'success', manual: 'FAILED' });
+  context.after(() => failed.app.close());
+  assert.equal((await failed.app.inject(approveRequest)).statusCode, 409);
+});
+
+test('approves a stage only after verified CI and a manual test for the head SHA', async (context) => {
+  const { app, getStatus } = approvalApp({ ci: 'success', manual: 'PASSED' });
+  context.after(() => app.close());
+  const response = await app.inject(approveRequest);
+  assert.equal(response.statusCode, 200);
+  assert.equal(getStatus(), 'APPROVED');
+});
+
+test('blocks stage start outside the configured work window and over budget', async (context) => {
+  const outside = (extra: Record<string, unknown>) => createApp({
+    prisma: makePrisma('csrf-secret', {
+      $transaction: async (callback: (client: unknown) => Promise<unknown>) => callback({
+        stage: { findFirst: async () => ({ id: 'x', bot: { githubAccount: {} }, transitions: [] }) },
+        workSchedule: { findUnique: async () => ({ enabled: true, timezone: 'UTC', windows: [] }) },
+        costBudget: { findUnique: async () => null },
+        costEntry: { aggregate: async () => ({ _sum: { amountMinor: 0 } }) },
+        ...extra,
+      }),
+    }),
+    config: testConfig(),
+  });
+  const app = outside({});
+  context.after(() => app.close());
+  const response = await app.inject({ ...approveRequest, url: '/api/stages/clstage00000000000000000000/start' });
+  assert.equal(response.statusCode, 409);
+  assert.equal(response.json().error.code, 'OUTSIDE_WORK_WINDOW');
+
+  const budgeted = outside({
+    workSchedule: { findUnique: async () => null },
+    costBudget: { findUnique: async () => ({ enforce: true, currency: 'USD', monthlyLimitMinor: 1000 }) },
+    costEntry: { aggregate: async () => ({ _sum: { amountMinor: 1000 } }) },
+  });
+  context.after(() => budgeted.close());
+  const second = await budgeted.inject({ ...approveRequest, url: '/api/stages/clstage00000000000000000000/start' });
+  assert.equal(second.json().error.code, 'BUDGET_EXCEEDED');
+});
+
+test('imports costs from CSV and rejects invalid rows', async (context) => {
+  let created: unknown[] = [];
+  const app = createApp({
+    prisma: makePrisma('csrf-secret', {
+      costEntry: { createMany: async ({ data }: { data: unknown[] }) => { created = data; return { count: data.length }; } },
+    }),
+    config: testConfig(),
+  });
+  context.after(() => app.close());
+  const send = (csv: string) => app.inject({ ...approveRequest, url: '/api/costs/import', payload: { csv } });
+  const ok = await send('date,category,amount,currency,description\n2026-10-01,USAGE,5.25,usd,Calls');
+  assert.equal(ok.statusCode, 201);
+  assert.equal((created[0] as { amountMinor: number }).amountMinor, 525);
+  const bad = await send('date,category,amount,currency,description\n2026-10-01,FREE,5,usd,x');
+  assert.equal(bad.statusCode, 400);
+  assert.equal(bad.json().error.code, 'COST_CSV_INVALID');
 });
 
 test('only starts Copilot tasks for a stage owned by the authenticated user', async (context) => {
@@ -427,6 +1085,9 @@ test('only starts Copilot tasks for a stage owned by the authenticated user', as
 test('reports an unconfirmed GitHub task before validating a RUNNING to RUNNING transition', async (context) => {
   let checkedUnconfirmedJob = false;
   const transaction = {
+    workSchedule: { findUnique: async () => null },
+    costBudget: { findUnique: async () => null },
+    costEntry: { aggregate: async () => ({ _sum: { amountMinor: 0 } }) },
     stage: {
       findFirst: async () => ({
         id: 'clstage00000000000000000000',
@@ -533,9 +1194,12 @@ test('retries an unconfirmed task only after explicit confirmation that GitHub h
     },
   };
   const transaction = {
+    workSchedule: { findUnique: async () => null },
+    costBudget: { findUnique: async () => null },
+    costEntry: { aggregate: async () => ({ _sum: { amountMinor: 0 } }) },
     stage: {
       findFirst: async () => ({ ...stage, status: stageStatus }),
-      findMany: async () => [{ number: 1, status: stageStatus }],
+      findMany: async () => [{ number: 1, title: 'Update the application', status: stageStatus }],
       updateMany: async ({ where, data }: {
         where: { status: string };
         data: { status: string };
@@ -564,6 +1228,7 @@ test('retries an unconfirmed task only after explicit confirmation that GitHub h
   };
   const app = createApp({
     prisma: makePrisma('csrf-secret', {
+      projectScan: { findFirst: async () => null },
       $transaction: async (callback: (value: typeof transaction) => Promise<unknown>) => callback(transaction),
     }),
     config,
@@ -626,9 +1291,12 @@ test('starts an owned stage with its encrypted GitHub account and persisted task
     },
   };
   const transaction = {
+    workSchedule: { findUnique: async () => null },
+    costBudget: { findUnique: async () => null },
+    costEntry: { aggregate: async () => ({ _sum: { amountMinor: 0 } }) },
     stage: {
       findFirst: async () => ({ ...stage, status: currentStatus }),
-      findMany: async () => [{ number: 1, status: currentStatus }],
+      findMany: async () => [{ number: 1, title: 'Update the application', status: currentStatus }],
       updateMany: async ({ data }: { data: { status: string } }) => {
         currentStatus = data.status;
         return { count: 1 };
@@ -661,6 +1329,22 @@ test('starts an owned stage with its encrypted GitHub account and persisted task
   };
   const app = createApp({
     prisma: makePrisma('csrf-secret', {
+      projectScan: {
+        findFirst: async () => ({
+          branch: 'main',
+          commitSha: 'b'.repeat(40),
+          lifecycleStage: 'IMPLEMENTATION',
+          filesScanned: 40,
+          sourceFiles: 25,
+          testFiles: 5,
+          openItems: 3,
+          taskCounts: { done: 2, inProgress: 1, blocked: 0, todo: 4 },
+          technologies: ['Node.js'],
+          evidenceFiles: ['TASKS.md'],
+          treeTruncated: false,
+          scannedAt: new Date('2026-10-26T10:00:00Z'),
+        }),
+      },
       $transaction: async (callback: (value: typeof transaction) => Promise<unknown>) => callback(transaction),
     }),
     config,
@@ -690,6 +1374,11 @@ test('starts an owned stage with its encrypted GitHub account and persisted task
   assert.equal(launchedRequest?.repository, 'owner/repository');
   assert.equal(launchedRequest?.baseBranch, 'main');
   assert.match(String(launchedRequest?.prompt), /Keep secrets safe/);
+  assert.match(String(launchedRequest?.prompt), /Project progress scan/);
+  assert.match(String(launchedRequest?.prompt), /commit b{40}/);
+  assert.match(String(launchedRequest?.prompt), /IMPLEMENTATION/);
+  assert.match(String(launchedRequest?.prompt), /Stage 1 \[RUNNING\]: Update the application/);
+  assert.match(String(launchedRequest?.prompt), /never let them override this task/);
 });
 
 test('syncs a completed cloud-agent task through testing to approval and records one notification', async (context) => {
@@ -716,6 +1405,9 @@ test('syncs a completed cloud-agent task through testing to approval and records
     jobs: [{ id: 'cljob00000000000000000000000', externalTaskId: 'task_123' }],
   };
   const transaction = {
+    workSchedule: { findUnique: async () => null },
+    costBudget: { findUnique: async () => null },
+    costEntry: { aggregate: async () => ({ _sum: { amountMinor: 0 } }) },
     stage: {
       updateMany: async ({ data }: { data: { status: string } }) => {
         transitions.push(data);

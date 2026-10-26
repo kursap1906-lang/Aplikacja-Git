@@ -11,42 +11,76 @@ const _configuredApiBaseUrl = String.fromEnvironment(
   'API_BASE_URL',
   defaultValue: 'https://staging.copilotcontrolcenter.com/api',
 );
-final _apiBaseUrl = kIsWeb ? Uri.base.resolve('/api').toString() : _configuredApiBaseUrl;
+final _apiBaseUrl = kIsWeb
+    ? Uri.base.resolve('/api').toString()
+    : _configuredApiBaseUrl;
 
 const _apiErrorMessages = <String, String>{
   'ACCOUNT_ALREADY_EXISTS': 'Konto z tym adresem e-mail już istnieje.',
   'BOT_NOT_FOUND': 'Nie znaleziono bota.',
-  'COPILOT_TASK_NOT_FOUND': 'Nie znaleziono potwierdzonego zadania Copilot dla tego etapu.',
-  'COPILOT_TASK_SUBMISSION_UNCONFIRMED':
-      'Nie wiadomo, czy GitHub przyjął poprzednie zadanie. Sprawdź zadania Copilot w repozytorium przed ponowieniem.',
-  'EDITOR_NOT_CONFIGURED': 'Edytor kodu nie jest jeszcze skonfigurowany na serwerze.',
-  'GITHUB_ACCOUNT_NOT_AVAILABLE': 'Konto GitHub jest niedostępne lub wymaga ponownej autoryzacji.',
-  'GITHUB_AGENT_TASK_FORBIDDEN':
-      'GitHub odmówił dostępu. Sprawdź plan Copilot i uprawnienia „Agent tasks” w repozytorium.',
-  'GITHUB_AGENT_TASK_RATE_LIMITED':
-      'GitHub tymczasowo ograniczył liczbę uruchamianych zadań. Spróbuj później.',
+  'COPILOT_TASK_NOT_FOUND':
+      'Nie znaleziono potwierdzonego zadania Copilot dla tego etapu.',
+  'COPILOT_TASK_SUBMISSION_UNCONFIRMED': 'Nie wiadomo, czy GitHub przyjął poprzednie zadanie. Sprawdź zadania Copilot w repozytorium przed ponowieniem.',
+  'EDITOR_NOT_CONFIGURED':
+      'Edytor kodu nie jest jeszcze skonfigurowany na serwerze.',
+  'GITHUB_ACCOUNT_NOT_AVAILABLE':
+      'Konto GitHub jest niedostępne lub wymaga ponownej autoryzacji.',
+  'GITHUB_AGENT_TASK_FORBIDDEN': 'GitHub odmówił dostępu. Sprawdź plan Copilot i uprawnienia „Agent tasks” w repozytorium.',
+  'GITHUB_AGENT_TASK_RATE_LIMITED': 'GitHub tymczasowo ograniczył liczbę uruchamianych zadań. Spróbuj później.',
   'GITHUB_AGENT_TASK_REJECTED': 'GitHub odrzucił żądanie uruchomienia zadania.',
-  'GITHUB_OAUTH_NOT_CONFIGURED': 'Logowanie GitHub nie jest jeszcze skonfigurowane.',
+  'GITHUB_OAUTH_NOT_CONFIGURED':
+      'Logowanie GitHub nie jest jeszcze skonfigurowane.',
   'GITHUB_REAUTH_REQUIRED': 'Połącz ponownie konto GitHub, aby kontynuować.',
-  'GITHUB_REPOSITORIES_INVALID': 'GitHub zwrócił nieprawidłową listę repozytoriów.',
-  'GITHUB_REPOSITORIES_UNAVAILABLE': 'Nie udało się pobrać repozytoriów z GitHuba.',
-  'GITHUB_REPOSITORY_MISMATCH': 'Wybierz repozytorium zweryfikowane przez GitHub.',
-  'GITHUB_REPOSITORY_NOT_FOUND': 'Nie znaleziono repozytorium lub nie masz do niego dostępu.',
-  'GITHUB_REPOSITORY_READ_ONLY': 'Wybrane konto GitHub musi mieć prawo zapisu w repozytorium.',
+  'GITHUB_REPOSITORIES_INVALID':
+      'GitHub zwrócił nieprawidłową listę repozytoriów.',
+  'GITHUB_REPOSITORIES_UNAVAILABLE':
+      'Nie udało się pobrać repozytoriów z GitHuba.',
+  'GITHUB_REPOSITORY_MISMATCH':
+      'Wybierz repozytorium zweryfikowane przez GitHub.',
+  'GITHUB_REPOSITORY_NOT_FOUND':
+      'Nie znaleziono repozytorium lub nie masz do niego dostępu.',
+  'GITHUB_REPOSITORY_READ_ONLY':
+      'Wybrane konto GitHub musi mieć prawo zapisu w repozytorium.',
+  'GITHUB_SCAN_FAILED':
+      'Nie udało się pobrać kompletnego stanu repozytorium z GitHub.',
+  'GITHUB_SCAN_FORBIDDEN':
+      'GitHub odmówił dostępu. Sprawdź uprawnienia konta do repozytorium.',
+  'TASK_DEPENDENCY_CYCLE': 'Ta zależność utworzyłaby cykl w grafie zadań.',
+  'TASK_DEPENDENCIES_UNMET': 'Nie można rozpocząć ani ukończyć zadania przed ukończeniem jego zależności.',
+  'TASK_DEPENDENCY_INVALID':
+      'Zależności muszą wskazywać zadania z tego samego projektu.',
+  'TEAM_NAME_EXISTS': 'Zespół o tej nazwie już istnieje.',
+  'PROJECT_REPOSITORY_REQUIRED':
+      'Dodaj repozytorium GitHub do projektu przed skanowaniem.',
   'INVALID_CREDENTIALS': 'Nieprawidłowy e-mail lub hasło.',
-  'INVALID_CSRF_TOKEN': 'Nie udało się zweryfikować żądania. Odśwież stronę i spróbuj ponownie.',
-  'INVALID_OAUTH_STATE': 'Nie udało się zweryfikować logowania GitHub. Zaloguj się ponownie.',
+  'INVALID_CSRF_TOKEN':
+      'Nie udało się zweryfikować żądania. Odśwież stronę i spróbuj ponownie.',
+  'INVALID_OAUTH_STATE':
+      'Nie udało się zweryfikować logowania GitHub. Zaloguj się ponownie.',
   'INVALID_ORIGIN': 'Żądanie pochodzi z niedozwolonego adresu.',
   'INVALID_REQUEST': 'Przesłane dane są nieprawidłowe.',
-  'INVALID_STAGE_ORDER': 'Numery etapów muszą być unikalne i kolejne, zaczynając od 1.',
+  'INVALID_STAGE_ORDER':
+      'Numery etapów muszą być unikalne i kolejne, zaczynając od 1.',
   'INVALID_STAGE_TRANSITION': 'Nie można zmienić statusu etapu w ten sposób.',
   'LOCAL_ACCOUNT_REQUIRED': 'Najpierw zaloguj się do aplikacji.',
-  'NOTIFICATION_NOT_FOUND': 'Powiadomienie nie istnieje lub zostało już odczytane.',
+  'NOTIFICATION_NOT_FOUND':
+      'Powiadomienie nie istnieje lub zostało już odczytane.',
   'PULL_REQUEST_NOT_FOUND': 'Nie znaleziono pull requesta.',
   'PULL_REQUEST_UNAVAILABLE': 'Nie udało się pobrać pull requesta z GitHuba.',
-  'REVIEW_EVIDENCE_REQUIRED':
-      'Zatwierdzenie wymaga zielonego CI, aktualnego preview i testów manualnych. Te dowody nie są jeszcze skonfigurowane.',
-  'STAGE_CHANGED_CONCURRENTLY': 'Etap zmienił status. Odśwież widok i spróbuj ponownie.',
+  'PDF_INVALID': 'Wybrany plik nie jest prawidłowym PDF-em.',
+  'PDF_PARSE_FAILED': 'Nie udało się odczytać tego PDF-a.',
+  'PDF_PARSER_UNAVAILABLE': 'Parser PDF nie jest dostępny na serwerze.',
+  'PDF_TEXT_NOT_FOUND':
+      'PDF nie zawiera odczytywalnego tekstu. OCR nie jest skonfigurowane.',
+  'PDF_TEXT_TOO_LARGE': 'Tekst w tym PDF-ie przekracza limit serwera.',
+  'PDF_TOO_LARGE': 'Maksymalny rozmiar PDF-a to 10 MB.',
+  'PROJECT_NOT_FOUND': 'Nie znaleziono projektu.',
+  'DOCUMENT_NOT_FOUND': 'Nie znaleziono dokumentu.',
+  'DOCUMENT_VERSION_CONFLICT':
+      'Dokument zmienił się podczas przesyłania. Spróbuj ponownie.',
+  'REVIEW_EVIDENCE_REQUIRED': 'Zatwierdzenie wymaga zielonego CI, aktualnego preview i testów manualnych. Te dowody nie są jeszcze skonfigurowane.',
+  'STAGE_CHANGED_CONCURRENTLY':
+      'Etap zmienił status. Odśwież widok i spróbuj ponownie.',
   'STAGE_NOT_FOUND': 'Nie znaleziono etapu.',
   'UNAUTHENTICATED': 'Zaloguj się, aby kontynuować.',
 };
@@ -55,27 +89,33 @@ final apiClientProvider = Provider<ApiClient>((ref) => ApiClient());
 
 class ApiClient {
   ApiClient({FlutterSecureStorage? storage, Dio? dio})
-      : _storage = storage ?? const FlutterSecureStorage(),
-        _dio = dio ?? Dio(BaseOptions(
-          baseUrl: _apiBaseUrl,
-          connectTimeout: const Duration(seconds: 8),
-          receiveTimeout: const Duration(seconds: 15),
-          sendTimeout: const Duration(seconds: 15),
-          headers: const {'Accept': 'application/json'},
-        )) {
-    _dio.interceptors.add(InterceptorsWrapper(
-      onRequest: (options, handler) async {
-        final session = await _storage.read(key: _sessionKey);
-        if (session != null && session.isNotEmpty) {
-          options.headers['Authorization'] = 'Bearer $session';
-          final csrf = await _storage.read(key: _csrfKey);
-          if (csrf != null && csrf.isNotEmpty) {
-            options.headers['X-CSRF-Token'] = csrf;
+    : _storage = storage ?? const FlutterSecureStorage(),
+      _dio =
+          dio ??
+          Dio(
+            BaseOptions(
+              baseUrl: _apiBaseUrl,
+              connectTimeout: const Duration(seconds: 8),
+              receiveTimeout: const Duration(seconds: 15),
+              sendTimeout: const Duration(seconds: 15),
+              headers: const {'Accept': 'application/json'},
+            ),
+          ) {
+    _dio.interceptors.add(
+      InterceptorsWrapper(
+        onRequest: (options, handler) async {
+          final session = await _storage.read(key: _sessionKey);
+          if (session != null && session.isNotEmpty) {
+            options.headers['Authorization'] = 'Bearer $session';
+            final csrf = await _storage.read(key: _csrfKey);
+            if (csrf != null && csrf.isNotEmpty) {
+              options.headers['X-CSRF-Token'] = csrf;
+            }
           }
-        }
-        handler.next(options);
-      },
-    ));
+          handler.next(options);
+        },
+      ),
+    );
   }
 
   final FlutterSecureStorage _storage;
@@ -92,7 +132,8 @@ class ApiClient {
       data: {
         'email': email,
         'password': password,
-        if (displayName != null && displayName.trim().isNotEmpty) 'displayName': displayName.trim(),
+        if (displayName != null && displayName.trim().isNotEmpty)
+          'displayName': displayName.trim(),
       },
     );
     await _storeSession(response);
@@ -107,11 +148,194 @@ class ApiClient {
     await _storeSession(response);
   }
 
+  Future<Map<String, dynamic>> createProject({
+    required String name,
+    required String description,
+    String? repository,
+  }) => request(
+    '/projects',
+    method: 'POST',
+    data: {
+      'name': name,
+      'description': description,
+      if (repository != null && repository.isNotEmpty) 'repository': repository,
+    },
+  );
+
+  Future<Map<String, dynamic>> createTeam({
+    required String name,
+    required String description,
+  }) => request(
+    '/teams',
+    method: 'POST',
+    data: {'name': name, 'description': description},
+  );
+
+  Future<void> setTeamBot({
+    required String teamId,
+    required String botId,
+    required bool assigned,
+  }) async {
+    await request(
+      '/teams/$teamId/bots/$botId',
+      method: assigned ? 'POST' : 'DELETE',
+      data: assigned ? {'botId': botId} : null,
+    );
+  }
+
+  Future<Map<String, dynamic>> createProjectTask({
+    required String projectId,
+    required String title,
+    required String description,
+    required List<String> dependencyIds,
+  }) => request(
+    '/projects/$projectId/tasks',
+    method: 'POST',
+    data: {
+      'title': title,
+      'description': description,
+      'dependencyIds': dependencyIds,
+    },
+  );
+
+  Future<Map<String, dynamic>> updateProjectTask({
+    required String taskId,
+    required String status,
+  }) => request('/tasks/$taskId', method: 'PATCH', data: {'status': status});
+
+  Future<void> updateProjectTaskDependencies({
+    required String taskId,
+    required List<String> dependencyIds,
+  }) async {
+    await request(
+      '/tasks/$taskId/dependencies',
+      method: 'PUT',
+      data: {'dependencyIds': dependencyIds},
+    );
+  }
+
+  Future<Map<String, dynamic>> createProjectMessage({
+    required String projectId,
+    required String content,
+  }) => request(
+    '/projects/$projectId/messages',
+    method: 'POST',
+    data: {'content': content},
+  );
+
+  Future<Map<String, dynamic>> createProjectHelpRequest({
+    required String projectId,
+    required String title,
+    required String description,
+  }) => request(
+    '/projects/$projectId/help-requests',
+    method: 'POST',
+    data: {'title': title, 'description': description},
+  );
+
+  Future<Map<String, dynamic>> resolveProjectHelpRequest({
+    required String projectId,
+    required String helpRequestId,
+  }) => request(
+    '/projects/$projectId/help-requests/$helpRequestId',
+    method: 'PATCH',
+    data: {'status': 'RESOLVED'},
+  );
+
+  Future<Map<String, dynamic>> createProjectCheckpoint({
+    required String projectId,
+    required String title,
+    required String notes,
+    String? commitSha,
+    String? progressStage,
+  }) => request(
+    '/projects/$projectId/checkpoints',
+    method: 'POST',
+    data: {
+      'title': title,
+      'notes': notes,
+      if (commitSha case final String sha when sha.isNotEmpty) 'commitSha': sha,
+      if (progressStage case final String stage) 'progressStage': stage,
+    },
+  );
+
+  Future<Map<String, dynamic>> scanProject({
+    required String projectId,
+    required String githubAccountId,
+  }) => request(
+    '/projects/$projectId/scan',
+    method: 'POST',
+    data: {'githubAccountId': githubAccountId},
+  );
+
+  Future<void> setProjectRepository({
+    required String projectId,
+    required String repository,
+  }) async {
+    await request(
+      '/projects/$projectId',
+      method: 'PATCH',
+      data: {'repository': repository},
+    );
+  }
+
+  Future<Map<String, dynamic>> uploadProjectPdf({
+    required String projectId,
+    required String filename,
+    required Uint8List bytes,
+  }) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/projects/$projectId/documents',
+        queryParameters: {'filename': filename},
+        data: bytes,
+        options: Options(contentType: 'application/pdf'),
+      );
+      return response.data ?? <String, dynamic>{};
+    } on DioException catch (error) {
+      throw _apiExceptionFromDio(error);
+    }
+  }
+
+  Future<Map<String, dynamic>> getProjectDocumentVersion({
+    required String documentId,
+    required int version,
+  }) => request('/documents/$documentId/versions/$version');
+
+  Future<Uint8List> downloadProjectDocument({
+    required String documentId,
+    required int version,
+  }) async {
+    try {
+      final response = await _dio.get<List<int>>(
+        '/documents/$documentId/versions/$version/download',
+        options: Options(responseType: ResponseType.bytes),
+      );
+      final bytes = response.data;
+      if (bytes == null || bytes.isEmpty) {
+        throw const ApiException(
+          'EMPTY_DOCUMENT',
+          'Serwer zwrócił pusty plik.',
+        );
+      }
+      return Uint8List.fromList(bytes);
+    } on DioException catch (error) {
+      throw _apiExceptionFromDio(error);
+    }
+  }
+
+  Future<void> deleteProjectDocument(String documentId) async {
+    await request('/documents/$documentId', method: 'DELETE');
+  }
+
   Future<void> _storeSession(Map<String, dynamic> response) async {
     final session = response['sessionToken'];
     final csrf = response['csrfToken'];
     if (session is! String || csrf is! String) {
-      throw const ApiException('INVALID_SESSION_RESPONSE', 'Serwer nie zwrócił prawidłowej sesji.');
+      throw const ApiException(
+        'INVALID_SESSION_RESPONSE',
+        'Serwer nie zwrócił prawidłowej sesji.',
+      );
     }
     await _storage.write(key: _sessionKey, value: session);
     await _storage.write(key: _csrfKey, value: csrf);
@@ -134,27 +358,32 @@ class ApiClient {
       );
       return response.data ?? <String, dynamic>{};
     } on DioException catch (error) {
-      final body = error.response?.data;
-      if (body is Map && body['error'] is Map) {
-        final apiError = Map<String, dynamic>.from(body['error'] as Map);
-        final code = apiError['code'] as String? ?? 'API_ERROR';
-        throw ApiException(
-          code,
-          _apiErrorMessages[code] ??
-              'Nie udało się wykonać operacji. Spróbuj ponownie za chwilę.',
-          error.response?.statusCode,
-        );
-      }
-      final unavailable = error.type == DioExceptionType.connectionError ||
-          error.type == DioExceptionType.connectionTimeout;
-      throw ApiException(
-        unavailable ? 'SERVER_UNAVAILABLE' : 'NETWORK_ERROR',
-        unavailable
-            ? 'Nie można połączyć się z serwerem. Sprawdź API_BASE_URL i uruchom backend.'
-            : 'Nie udało się połączyć z serwerem.',
+      throw _apiExceptionFromDio(error);
+    }
+  }
+
+  ApiException _apiExceptionFromDio(DioException error) {
+    final body = error.response?.data;
+    if (body is Map && body['error'] is Map) {
+      final apiError = Map<String, dynamic>.from(body['error'] as Map);
+      final code = apiError['code'] as String? ?? 'API_ERROR';
+      return ApiException(
+        code,
+        _apiErrorMessages[code] ??
+            'Nie udało się wykonać operacji. Spróbuj ponownie za chwilę.',
         error.response?.statusCode,
       );
     }
+    final unavailable =
+        error.type == DioExceptionType.connectionError ||
+        error.type == DioExceptionType.connectionTimeout;
+    return ApiException(
+      unavailable ? 'SERVER_UNAVAILABLE' : 'NETWORK_ERROR',
+      unavailable
+          ? 'Nie można połączyć się z serwerem. Sprawdź API_BASE_URL i uruchom backend.'
+          : 'Nie udało się połączyć z serwerem.',
+      error.response?.statusCode,
+    );
   }
 
   Future<String> beginGitHubSignIn({required bool nativeClient}) async {
@@ -167,7 +396,10 @@ class ApiClient {
     final url = data['authorizationUrl'];
     final state = data['state'];
     if (url is! String || state is! String) {
-      throw const ApiException('INVALID_OAUTH_RESPONSE', 'Serwer nie zwrócił linku logowania.');
+      throw const ApiException(
+        'INVALID_OAUTH_RESPONSE',
+        'Serwer nie zwrócił linku logowania.',
+      );
     }
     await _storage.write(key: _oauthStateKey, value: state);
     return url;
@@ -176,7 +408,10 @@ class ApiClient {
   Future<void> exchangeOAuthHandoff(String code, String state) async {
     final expectedState = await _storage.read(key: _oauthStateKey);
     if (expectedState == null || expectedState != state) {
-      throw const ApiException('INVALID_OAUTH_STATE', 'Weryfikacja logowania nie powiodła się. Zaloguj się ponownie.');
+      throw const ApiException(
+        'INVALID_OAUTH_STATE',
+        'Weryfikacja logowania nie powiodła się. Zaloguj się ponownie.',
+      );
     }
 
     final response = await request(
