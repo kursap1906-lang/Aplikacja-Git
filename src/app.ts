@@ -29,6 +29,8 @@ import { registerWorkspaceRoutes } from './workspace/routes.ts';
 import { registerTaskRunRoutes } from './workspace/runs.ts';
 import { registerWorkspaceGitHubRoutes } from './workspace/github.ts';
 import { registerWorkspaceSettings } from './workspace/settings.ts';
+import { registerTeamExecution } from './workspace/team-execution.ts';
+import { assertTeamNotCoordinated } from './workspace/team-execution-state.ts';
 import { verifyRepositoryAccess } from './github/repository-access.ts';
 import { registerAnalysisRoutes } from './ai/routes.ts';
 import { attachAnalysisWorker } from './ai/worker.ts';
@@ -460,6 +462,10 @@ export function createApp(options: {
   });
   registerWorkspaceGitHubRoutes(app, { prisma, encryptionKey, fetcher, authenticate: authenticateWorkspace });
   registerWorkspaceSettings(app, { prisma, config, encryptionKey, fetcher, authenticate: authenticateWorkspace });
+  const teamWorker = registerTeamExecution(app, {
+    prisma, encryptionKey, fetcher, copilotProvider, authenticate: authenticateWorkspace,
+    assertStart: assertPlanningAllowsStart,
+  }, config.NODE_ENV !== 'test');
   registerWorkspaceRoutes(app, {
     prisma,
     encryptionKey,
@@ -1193,9 +1199,10 @@ export function createApp(options: {
       return await prisma.$transaction(async (transaction) => {
         const task = await transaction.projectTask.findFirst({
           where: { id: taskId, userId: session.userId },
-          select: { id: true, projectId: true },
+          select: { id: true, projectId: true, teamId: true },
         });
         if (!task) throw new ApiError(404, 'TASK_NOT_FOUND', 'Nie znaleziono zadania.');
+        await assertTeamNotCoordinated(transaction, task.teamId);
         const dependencies = dependencyIds.length
           ? await transaction.projectTask.findMany({
               where: {
@@ -1267,6 +1274,7 @@ export function createApp(options: {
           select: {
             id: true,
             githubStageId: true,
+            teamId: true,
             githubStage: { select: { status: true } },
             prerequisites: {
               select: { dependsOn: { select: { id: true, title: true, status: true } } },
@@ -1277,6 +1285,7 @@ export function createApp(options: {
         if (task.githubStageId) {
           throw new ApiError(409, 'AGENT_REVIEW_REQUIRED', 'Status powiązanego zadania zmienia wykonanie i zatwierdzenie etapu, nie ręczne pominięcie review.');
         }
+        await assertTeamNotCoordinated(transaction, task.teamId);
         const unmet = task.prerequisites.filter((item) => item.dependsOn.status !== 'COMPLETED');
         if (status !== 'TODO' && status !== 'BLOCKED' && unmet.length) {
           throw new ApiError(
@@ -2856,6 +2865,9 @@ export function createApp(options: {
       await assertPlanningAllowsStart(transaction, session.userId, new Date());
       if (stage.bot.definitionId || stage.projectTask) {
         await transaction.$queryRaw`SELECT "id" FROM "Bot" WHERE "id" = ${stage.botId} FOR UPDATE`;
+        if (await transaction.teamExecution.findFirst({
+          where: { team: { bots: { some: { botId: stage.botId } } }, state: { notIn: ['STOPPED', 'RELEASED'] } }, select: { id: true },
+        })) throw new ApiError(409, 'BOT_CONTROLLED_BY_TEAM', 'Bot jest sterowany przez lidera zespołu. Użyj podglądu zespołu zamiast osobnego startu.');
         const active = await transaction.stage.findFirst({
           where: { botId: stage.botId, id: { not: stage.id }, status: { in: ['RUNNING', 'TESTING', 'WAITING_APPROVAL', 'PAUSED'] } },
           select: { id: true },
@@ -3449,6 +3461,7 @@ export function createApp(options: {
   });
 
   app.addHook('onClose', async () => {
+    await teamWorker.stop();
     await analysisWorker?.stop();
     await prisma.$disconnect();
   });

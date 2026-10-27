@@ -158,12 +158,13 @@ class _WorkspaceTeamsPageState extends State<WorkspaceTeamsPage> {
                 runSpacing: 8,
                 children: [
                   for (final (index, label) in [
-                    'Zadania',
-                    'Boty i GitHub',
-                    'Współpraca',
-                    'PDF',
-                    'Podgląd botów',
-                  ].indexed)
+                    (5, 'Road Map'),
+                    (0, 'Zadania'),
+                    (1, 'Boty i GitHub'),
+                    (2, 'Współpraca'),
+                    (3, 'PDF'),
+                    (4, 'Podgląd botów'),
+                  ])
                     ChoiceChip(
                       label: Text(label),
                       selected: _tab == index,
@@ -174,7 +175,7 @@ class _WorkspaceTeamsPageState extends State<WorkspaceTeamsPage> {
             ],
           ),
         ),
-        if (_tab == 4)
+        if (_tab == 4 || _tab == 5)
           WorkspaceTeamActivity(
             key: ValueKey('activity-${team.id}'),
             team: team,

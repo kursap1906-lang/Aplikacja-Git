@@ -37,6 +37,8 @@ class _TeamApi extends ApiClient {
   };
   final teams = <Map<String, dynamic>>[];
   final writes = <({String path, String method, Map<String, dynamic> body})>[];
+  Map<String, dynamic>? execution;
+  List<Map<String, dynamic>> roadmap = [];
   ApiException? saveError;
   ApiException? loadError;
   int _sequence = 0;
@@ -105,6 +107,16 @@ class _TeamApi extends ApiClient {
     Object? data,
     bool withCredentials = false,
   }) async {
+    if (path.endsWith('/roadmap') && method == 'GET') {
+      return {
+        'roadmap': roadmap,
+        'executions': <Object>[],
+        'version': '2026-10-27T00:00:00.000Z',
+      };
+    }
+    if (path.endsWith('/execution') && method == 'GET') {
+      return {'execution': execution};
+    }
     if (path == '/session') {
       return {
         'user': {'id': 'owner'},
@@ -137,6 +149,13 @@ class _TeamApi extends ApiClient {
         : Map<String, dynamic>.from(data as Map);
     writes.add((path: path, method: method, body: body));
     if (saveError != null) throw saveError!;
+    if (path.endsWith('/roadmap') && method == 'PUT') {
+      roadmap = (body['roadmap'] as List)
+          .map((value) => Map<String, dynamic>.from(value as Map))
+          .toList();
+      return {'ok': true};
+    }
+    if (path.contains('/execution/') && method == 'POST') return {'ok': true};
     if (path.startsWith('/workspace/bots/') &&
         path.endsWith('/schedule') &&
         method == 'POST') {
@@ -281,7 +300,7 @@ Future<void> _tap(WidgetTester tester, String text) async {
 }
 
 Future<void> _fill(WidgetTester tester, String label, String value) async {
-  final field = find.widgetWithText(TextFormField, label);
+  final field = find.widgetWithText(TextField, label);
   await tester.ensureVisible(field);
   await tester.pumpAndSettle();
   await tester.enterText(field, value);
@@ -654,6 +673,98 @@ void main() {
     await tester.pump(const Duration(seconds: 16));
     expect(api.writes, isEmpty);
   });
+
+  testWidgets(
+    'whole team start and main promotion require explicit owner confirmation',
+    (tester) async {
+      final api = _TeamApi()..seedTeam('Frontend');
+      await _open(tester, api, team: 'Frontend');
+      await _tap(tester, 'Podgląd botów');
+      await _tap(tester, 'Start zespołu');
+      expect(api.writes, isEmpty);
+      await _tap(tester, 'Anuluj');
+      expect(api.writes, isEmpty);
+      await _tap(tester, 'Start zespołu');
+      await _tap(tester, 'Potwierdzam');
+      expect(api.writes.single.path, '/workspace/teams/team-1/execution/start');
+      expect(find.text('Zatwierdź i przenieś do main'), findsNothing);
+      api.execution = {
+        'phase': 'READY',
+        'items': <Object>[],
+        'events': <Object>[],
+        'testBranch': 'ccc/test-project',
+        'leaderBotId': 'instance-team-1-dev',
+        'preview': {
+          'sha': 'b' * 40,
+          'success': true,
+          'url': 'https://owner.github.io/repository/',
+        },
+      };
+      await tester.tap(find.byTooltip('Odśwież koordynatora'));
+      await tester.pumpAndSettle();
+      await _tap(tester, 'Zatwierdź i przenieś do main');
+      expect(api.writes.length, 1);
+      await _tap(tester, 'Potwierdzam');
+      expect(api.writes.last.path, '/workspace/teams/team-1/execution/release');
+      expect(api.writes.last.body, {'sha': 'b' * 40, 'confirmed': true});
+    },
+  );
+
+  testWidgets(
+    'roadmap saves dates and custom fields; task progress refreshes without clicking',
+    (tester) async {
+      final api = _TeamApi()..seedTeam('Frontend');
+      await _open(tester, api, team: 'Frontend');
+      await _tap(tester, 'Road Map');
+      await _tap(tester, 'Dodaj etap');
+      await _fill(
+        tester,
+        'Nazwa etapu, np. Ekran logowania',
+        'Ekran logowania',
+      );
+      await _fill(
+        tester,
+        'Termin ukończenia YYYY-MM-DD (opcjonalny)',
+        '2026-11-15',
+      );
+      await _fill(
+        tester,
+        'Własne pola JSON, np. {"Priorytet":"Wysoki","Odbiorca":"Ekipa"}',
+        '{"Odbiorca":"Ekipa"}',
+      );
+      await _tap(tester, 'Zapisz etap');
+      expect(api.roadmap.single['dueDate'], '2026-11-15');
+      expect(api.roadmap.single['fields'], {'Odbiorca': 'Ekipa'});
+      await _tap(tester, '1. Ekran logowania');
+      expect(find.text('Etap: Ekran logowania'), findsOneWidget);
+      api.execution = {
+        'phase': 'WORK',
+        'milestoneId': api.roadmap.single['id'],
+        'events': <Object>[],
+        'testBranch': 'ccc/test-project',
+        'leaderBotId': 'instance-team-1-dev',
+        'items': [
+          {
+            'title': 'Login validation',
+            'key': 'login',
+            'botId': 'instance-team-1-dev',
+            'description': 'Implement tested input validation.',
+            'state': 'RUNNING',
+            'approval': 'leader',
+          },
+        ],
+      };
+      await tester.pump(const Duration(seconds: 16));
+      await tester.pump();
+      expect(find.textContaining('W toku — GitHub'), findsOneWidget);
+      expect(find.text('Zatwierdź cały etap'), findsNothing);
+      api.execution!['items'][0]['state'] = 'COMPLETED';
+      await tester.pump(const Duration(seconds: 16));
+      await tester.pump();
+      expect(find.text('Ukończone — 100%'), findsOneWidget);
+      expect(api.writes.every((write) => write.method == 'PUT'), isTrue);
+    },
+  );
 
   testWidgets(
     'calendar persists ISO weekdays and IANA timezone for the selected instance only',

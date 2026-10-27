@@ -1528,6 +1528,7 @@ test('starts a team-role stage remotely with its encrypted GitHub account and pe
   };
   const transaction = {
     $queryRaw: async () => [],
+    teamExecution: { findFirst: async () => null },
     workSchedule: { findUnique: async () => null },
     costBudget: { findUnique: async () => null },
     costEntry: { aggregate: async () => ({ _sum: { amountMinor: 0 } }) },

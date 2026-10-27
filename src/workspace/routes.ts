@@ -6,6 +6,7 @@ import { ApiError, isUniqueConstraintError, parseRequest } from '../http/errors.
 import { validateHierarchy } from './hierarchy.ts';
 import { registerWorkspaceMaterialRoutes } from './materials.ts';
 import { registerConstructionTemplate } from './construction-template.ts';
+import { assertTeamNotCoordinated } from './team-execution-state.ts';
 
 const definitionSchema = z.object({
   name: z.string().trim().min(1).max(100),
@@ -72,6 +73,7 @@ async function lockTeam(tx: Prisma.TransactionClient, id: string, userId: string
     SELECT "id" FROM "Team" WHERE "id" = ${id} AND "userId" = ${userId} FOR UPDATE
   `;
   if (rows.length !== 1) throw new ApiError(404, 'TEAM_NOT_FOUND', 'Nie znaleziono zespołu.');
+  await assertTeamNotCoordinated(tx, id);
 }
 
 async function createInstance(
@@ -87,7 +89,8 @@ async function createInstance(
       systemPrompt: definition.systemPrompt, ...repository,
     },
   });
-  return tx.teamBot.create({ data: { teamId, botId: bot.id } });
+  const leader = await tx.teamBot.findFirst({ where: { teamId, parentId: null }, orderBy: { createdAt: 'asc' } });
+  return tx.teamBot.create({ data: { teamId, botId: bot.id, parentId: leader?.id } });
 }
 
 function uniqueConflict(error: unknown, code: string, message: string): never {
@@ -365,6 +368,9 @@ export function registerWorkspaceRoutes(app: FastifyInstance, options: {
       if (member.bot.status !== 'IDLE') throw new ApiError(409, 'BOT_NOT_IDLE', 'Najpierw zakończ sesję bota.');
       const taskCount = await tx.projectTask.count({ where: { teamId: id, botId: member.botId } });
       if (taskCount) throw new ApiError(409, 'BOT_HAS_TASKS', 'Najpierw przypisz zadania innemu botowi lub je usuń.');
+      if (member.parentId === null && await tx.teamBot.count({ where: { teamId: id } }) > 1) {
+        throw new ApiError(409, 'TEAM_LEADER_REQUIRED', 'Przed usunięciem lidera wybierz innego lidera w hierarchii współpracy.');
+      }
       await tx.teamBot.updateMany({ where: { teamId: id, parentId: memberId }, data: { parentId: null } });
       await tx.teamBot.delete({ where: { id: memberId } });
       await tx.team.update({ where: { id }, data: { updatedAt: new Date() } });
@@ -380,7 +386,11 @@ export function registerWorkspaceRoutes(app: FastifyInstance, options: {
     const { id } = parseRequest(idSchema, request.params);
     const input = parseRequest(hierarchySchema, request.body);
     validateHierarchy(input.members);
+    if (input.members.length && input.members.filter(member => member.parentId === null).length !== 1) {
+      throw new ApiError(400, 'TEAM_LEADER_REQUIRED', 'Zespół musi mieć dokładnie jednego lidera na szczycie hierarchii.');
+    }
     await prisma.$transaction(async (tx) => {
+      await lockTeam(tx, id, userId);
       const team = await tx.team.findFirst({
         where: { id, userId },
         include: { bots: { select: { id: true } } },
@@ -440,6 +450,7 @@ export function registerWorkspaceRoutes(app: FastifyInstance, options: {
       await tx.$queryRaw`SELECT "id" FROM "ProjectTask" WHERE "id" = ${id} AND "userId" = ${userId} FOR UPDATE`;
       const task = await tx.projectTask.findFirst({ where: { id, userId } });
       if (!task) throw new ApiError(404, 'TASK_NOT_FOUND', 'Nie znaleziono zadania.');
+      await assertTeamNotCoordinated(tx, task.teamId);
       if (task.githubStageId) {
         throw new ApiError(409, 'TASK_HAS_AGENT_STAGE', 'Zadanie ma zapisany etap GitHub. Zachowaj jego treść i przypisanie; kolejne zmiany dodaj jako nowe zadanie.');
       }
@@ -467,6 +478,7 @@ export function registerWorkspaceRoutes(app: FastifyInstance, options: {
       `;
       if (rows.length !== 1) throw new ApiError(404, 'TASK_NOT_FOUND', 'Nie znaleziono zadania.');
       const task = await tx.projectTask.findUniqueOrThrow({ where: { id } });
+      await assertTeamNotCoordinated(tx, task.teamId);
       if (task.githubStageId) throw new ApiError(409, 'TASK_HAS_AGENT_STAGE', 'Zachowaj historię zadania powiązanego z GitHub Agents.');
       const dependents = await tx.taskDependency.count({ where: { dependsOnTaskId: id } });
       if (dependents) throw new ApiError(409, 'TASK_HAS_DEPENDENTS', 'Inne zadania zależą od tego zadania. Najpierw zmień ich zależności.');
@@ -498,6 +510,7 @@ export function registerWorkspaceRoutes(app: FastifyInstance, options: {
       });
       if (!task) throw new ApiError(404, 'TASK_NOT_FOUND', 'Nie znaleziono zadania.');
       if (task.githubStage) return task.githubStage;
+      await assertTeamNotCoordinated(tx, task.teamId);
       if (!task.botId) throw new ApiError(409, 'TASK_BOT_REQUIRED', 'Przypisz zadanie botowi.');
       if (task.status === 'COMPLETED') throw new ApiError(409, 'TASK_ALREADY_COMPLETED', 'To zadanie jest już ukończone.');
       await tx.$queryRaw`SELECT "id" FROM "Bot" WHERE "id" = ${task.botId} AND "userId" = ${userId} FOR UPDATE`;

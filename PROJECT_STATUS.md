@@ -1,6 +1,48 @@
 # Stan projektu
 
-Ostatnia aktualizacja: 2026-10-26
+Ostatnia aktualizacja: 2026-10-27
+
+## Wydanie `staging-roadmap-20261027-r1`
+
+- Wdrożono pod `https://staging.copilotcontrolcenter.com/`. Kontenery API
+  i PostgreSQL są zdrowe; zastosowano 14 migracji. Utrwalono tag obrazu
+  w konfiguracji stagingu; poprzednie r2 zachowano do rollbacku.
+- Road Map: edytowalne etapy, terminy i własne pola tekstowe JSON, kolejność,
+  wybór punktu, lista uporządkowanych zadań i historia wykonań.
+  Jest to diagram liniowy — nie ma jeszcze przeciągania pozycji ani
+  niezależnych zależności między etapami.
+- Lider jest wymagany i pracuje obecnie przez GitHub Agents, nie OpenAI.
+  Zleca szczegółowe zadania i review. Wszystkie boty oraz lider wykonują
+  etap sekwencyjnie na jednej gałęzi i jednym PR. Wspólne plan/dokumentacja
+  i handoffy w repozytorium zapewniają przekazanie kontekstu.
+- Cały etap wymaga akceptacji właściciela lub uwag do poprawek. Merge na test
+  sprawdza aktualny SHA i rzeczywiste CI. Main wymaga osobnego potwierdzenia,
+  zaakceptowanych etapów i poprawnego podglądu aktualnego test SHA.
+- Koordynator działa na backendzie co 15 sekund, niezależnie od przeglądarki.
+  Stan, dzierżawy i dziennik są trwałe w PostgreSQL. Odczyty UI odświeżają
+  diagram i paski co 15 sekund. Aktywne zadania nie mają zmyślonego procentu;
+  postęp bota pokazuje liczbę zakończonych zadań.
+- Kompilacja uruchamia workflow projektu na GitHub Actions i weryfikuje
+  wynik oraz deployment `ccc-preview` z HTTPS URL dla dokładnego SHA.
+  Nie uruchamiamy kodu repozytorium lokalnie na VPS panelu.
+  Konfigurację build/test/hostingu ma przygotować pierwsze zadanie lidera.
+  Udany workflow/deployment nie zastępuje testu uruchomieniowego użytkownika.
+- Przerwane zapisy nie są ślepo ponawiane; dodano powiązanie istniejącej
+  sesji i uzgodnienie rzeczywistego wyniku merge, także całego etapu.
+  Zatrzymanie koordynacji nie anuluje już wysłanych zadań GitHub.
+- Walidacja: 78/78 testów backendu, 5/5 scenariuszy PostgreSQL na świeżej
+  bazie z 14 migracjami, 33/33 testy Fluttera. Testy obejmują wspólną gałąź,
+  bramki akceptacji, utraconą odpowiedź merge, zapis dat/pól i automatyczny
+  postęp. TypeScript przechodzi; Flutter analyze ma tylko 6 istniejących
+  informacji, bez nowych błędów/ostrzeżeń. Release Web i Docker zbudowano.
+- Backup przed migracją:
+  `backups/staging/postgres-20261027T080042.699630050Z.dump`
+  (zweryfikowane archiwum pg_restore). Publiczny i lokalny Web mają SHA-256:
+  `f90e3f6529769f895472e20d85d87c405dce1158b4a2694bd9fa40dcebf3f5fb`.
+- Nie uruchomiono płatnych botów ani analizy dokumentów. Ich rzeczywisty
+  dostęp do GitHub Agents i build przyszłej aplikacji użytkownik testuje sam.
+  Nie ma jeszcze lidera OpenAI, równoległej orkiestracji ani pełnej historii
+  wiadomości w bazie; to osobny zakres kolejnej rozbudowy.
 
 ## Wydanie `staging-agents-20261026-r2`
 

@@ -37,14 +37,15 @@ const statusSchema = z.object({
   context: z.string(), state: z.string(), target_url: z.string().nullable(),
 });
 
-export function registerWorkspaceGitHubRoutes(app: FastifyInstance, options: {
+type GitHubOptions = {
   prisma: PrismaClient;
   authenticate: (request: FastifyRequest, mutation: boolean) => Promise<string>;
   encryptionKey: () => string;
   fetcher: typeof fetch;
-}): void {
-  const { prisma, authenticate, fetcher } = options;
-  async function client(userId: string, accountId: string, repository: string) {
+};
+
+export async function workspaceGitHubClient(options: Pick<GitHubOptions, 'prisma' | 'encryptionKey' | 'fetcher'>, userId: string, accountId: string, repository: string) {
+  const { prisma, fetcher } = options;
     const account = await prisma.gitHubAccount.findFirst({ where: { id: accountId, userId, status: 'ACTIVE' } });
     if (!account) throw new ApiError(404, 'GITHUB_ACCOUNT_NOT_AVAILABLE', 'Wybierz własne aktywne konto GitHub.');
     if (account.tokenExpiresAt && account.tokenExpiresAt <= new Date()) {
@@ -85,6 +86,10 @@ export function registerWorkspaceGitHubRoutes(app: FastifyInstance, options: {
       return { data: parsed.data, hasNext: /rel="next"/.test(response.headers.get('link') ?? '') };
     };
   }
+export function registerWorkspaceGitHubRoutes(app: FastifyInstance, options: GitHubOptions): void {
+  const { prisma, authenticate } = options;
+  const client = (userId: string, accountId: string, repository: string) =>
+    workspaceGitHubClient(options, userId, accountId, repository);
   const summarize = (pull: z.infer<typeof pullSchema>) => ({
     number: pull.number, title: pull.title, body: pull.body, url: pull.html_url,
     state: pull.merged_at ? 'merged' : pull.draft ? 'draft' : pull.state,

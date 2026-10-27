@@ -5,10 +5,59 @@ projektu z jawną akceptacją. API Fastify przechowuje dane w PostgreSQL.
 
 ## Aktualne wydanie staging
 
-`staging-agents-20261026-r2` działa pod
+`staging-roadmap-20261027-r1` działa pod
 `https://staging.copilotcontrolcenter.com/`. Root otwiera rzeczywisty panel
 API; demonstracja jest dostępna wyłącznie pod `/demo`. Szczegółowy bieżący
 status oraz jawne braki są na początku `PROJECT_STATUS.md`.
+
+### Road Map i praca całego zespołu
+
+1. **Zespoły AI → zespół → Road Map → Dodaj etap**: diagram etapów, zakres,
+   termin oraz własne pola tekstowe JSON. Etapy można edytować i przestawiać.
+   Zatwierdzone etapy są niezmienne; edycja planu podczas koordynacji jest
+   blokowana, aby nie zmienić zakresu już wysłanych zadań.
+2. Wybierz punkt diagramu i **Start zespołu**. Wymagany jest jeden
+   lider na szczycie hierarchii. Lider przygotowuje szczegółowe zadania,
+   przypisania i zależności w `.ccc/team-plan.json`; serwer uruchamia wskazane
+   boty sekwencyjnie i zleca liderowi review każdego przyrostu.
+3. Cały etap, łącznie z liderem, używa jednej gałęzi
+   `ccc/roadmap-<teamId>-<milestoneId>` i jednego PR do `ccc/test-<projectId>`.
+   Dokumentacja i `.ccc/handoffs/<taskKey>.md` są wspólne dla kolejnych botów.
+   Odbiór pojedynczego zadania nie scala PR ani nie zatwierdza całego etapu.
+4. **Kompiluj bieżącą aplikację** zleca rzeczywisty build aplikacji z repozytorium
+   przez GitHub Actions, nie lokalny build na VPS panelu. Pierwsze zadanie
+   lidera przygotowuje `.github/workflows/ccc-preview.yml`: trigger `push` dla
+   gałęzi testowej i `ccc/roadmap-**`, testy, build oraz deployment
+   `ccc-preview` z publicznym `environment_url` HTTPS dla bieżącego SHA.
+   Panel zapisuje `.ccc/preview-request.json`, sprawdza zakończony workflow
+   i deployment, a dopiero potem udostępnia **Otwórz aplikację do testów**.
+   Dla Pages może włączyć publikację Actions; full-stack wymaga prawdziwego
+   runtime i uprawnień, a nie statycznej atrapy backendu.
+5. Po wszystkich zadaniach dostępne są **Zatwierdź cały etap** (merge na test
+   z weryfikacją SHA i CI) albo **Wprowadź poprawki etapu** (zadanie lidera
+   na tej samej gałęzi). Main wymaga osobnego potwierdzenia właściciela,
+   zatwierdzonych wszystkich etapów i udanego podglądu aktualnego test SHA,
+   zintegrowanego z niezmienioną bazą main.
+
+Koordynator działa na serwerze co 15 sekund także po zamknięciu przeglądarki.
+Diagram, dziennik i paski zadań/botów odświeżają się co 15 sekund w widoku.
+GitHub nie podaje procentu wewnątrz zadania: aktywne zadanie ma wskaźnik
+nieokreślony, a postęp bota to liczba ukończonych zadań / przydzielonych.
+Brak uprawnień, sekretów, nowe koszty i niebezpieczne operacje blokują etap;
+akceptacja na końcu nie jest zgodą na ich wcześniejsze wykonanie.
+
+Stan i dzierżawy są trwałe w PostgreSQL. Niepotwierdzone zgłoszenie/merge
+nie są automatycznie powtarzane. **Wyjaśnij zapis na GitHub** weryfikuje
+istniejącą sesję/PR. Zatrzymanie koordynacji nie anuluje już wysłanej sesji.
+Ręczne starty/statusy są zablokowane podczas koordynacji.
+
+API: `GET|PUT /api/workspace/teams/:id/roadmap`,
+`GET /api/workspace/teams/:id/execution`,
+`POST /api/workspace/teams/:id/execution/{start,approve-milestone,revise-milestone,preview,release,stop,resume,reconcile}`.
+Mutacje wymagają sesji i CSRF. Road Map używa wersji `Team.updatedAt`.
+Migracja `20261027001000_team_execution` dodaje roadmapę i trwałe wykonania.
+Płatnych zadań użytkownika nie uruchamiano; dostęp konta do Agent Tasks
+i rzeczywisty build jego przyszłej aplikacji pozostają do testu użytkownika.
 
 ### Panel i zdalne GitHub Agents
 
@@ -30,9 +79,10 @@ status oraz jawne braki są na początku `PROJECT_STATUS.md`.
   status GitHub, postęp zadań, gałąź i przejście do startu/review. Aktywne
   etapy odświeżane są co 15 sekund tylko przy otwartym podglądzie.
   Dialog pokazuje szczegółowy prompt, metadane sesji i powiązany PR.
-- Każdy bot zespołowy używa jednej gałęzi `ccc/bot-<id>` przekazanej jako
+- W starszym trybie ręcznym każdy bot używa jednej gałęzi `ccc/bot-<id>` przekazanej jako
   `head_ref`. Kolejny etap wymaga zatwierdzenia poprzedniego oraz zamknięcia
-  lub scalenia poprzedniego PR. Aplikacja nie resetuje gałęzi ani nie wykonuje merge.
+  lub scalenia poprzedniego PR. Tryb ręczny nie resetuje gałęzi ani nie wykonuje merge;
+  koordynacja Road Map korzysta z osobnego przepływu opisanego powyżej.
 - Analiza AI rozbija wymagania na testowalne przyrosty z krokami, kryteriami
   odbioru i weryfikacją. Zapisuje zależności między zadaniami oraz kolejność
   zadań tej samej instancji; odrzuca cykle, nieznane klucze i zbyt długie prompty.

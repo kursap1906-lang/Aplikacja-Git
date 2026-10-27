@@ -286,6 +286,7 @@ model Team {
   userId      String
   name        String
   description String    @default("") @db.Text
+  roadmap     Json      @default("[]") @db.JsonB
   projectId   String?
   createdAt   DateTime  @default(now()) @db.Timestamptz(6)
   updatedAt   DateTime  @updatedAt @db.Timestamptz(6)
@@ -298,6 +299,21 @@ model Team {
   @@unique([userId, name])
   @@index([userId, updatedAt])
   @@index([projectId])
+  executions TeamExecution[]
+}
+
+model TeamExecution {
+  id         String   @id @default(cuid())
+  teamId     String
+  state      String
+  data       Json     @db.JsonB
+  leaseUntil DateTime?
+  createdAt  DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt  DateTime @updatedAt @db.Timestamptz(6)
+  team       Team     @relation(fields: [teamId], references: [id], onDelete: Restrict)
+
+  @@index([teamId, createdAt])
+  @@index([state, leaseUntil])
 }
 
 model TeamBot {

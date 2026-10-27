@@ -7,6 +7,7 @@ import '../../core/api.dart';
 import 'workspace_data.dart';
 import 'workspace_shell.dart';
 import 'workspace_agent_dialog.dart';
+import 'workspace_team_control.dart';
 
 class WorkspaceTeamActivity extends StatefulWidget {
   const WorkspaceTeamActivity({
@@ -25,6 +26,7 @@ class WorkspaceTeamActivity extends StatefulWidget {
 class _WorkspaceTeamActivityState extends State<WorkspaceTeamActivity> {
   Timer? _timer;
   bool _busy = false;
+  bool _coordinated = false;
   String? _error;
   final _states = <String, String>{};
 
@@ -90,8 +92,18 @@ class _WorkspaceTeamActivityState extends State<WorkspaceTeamActivity> {
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        WorkspaceTeamControl(
+          team: widget.team,
+          api: widget.api,
+          onChanged: widget.onChanged,
+          onCoordinationChanged: (active) {
+            if (mounted && active != _coordinated) {
+              setState(() => _coordinated = active);
+            }
+          },
+        ),
         const Text(
-          'Status aktywnych etapów odświeżamy co 15 sekund, gdy ten zespół jest otwarty. Każdy bot ma jedną stałą gałąź roboczą. Zadania kończą się dopiero po Twoim review.',
+          'Poniżej etapy uruchamiane ręcznie. Podczas pracy lidera używaj sterowania zespołem powyżej — osobne starty są blokowane. Ręczne etapy nadal wymagają Twojego review.',
         ),
         if (_busy) const LinearProgressIndicator(),
         if (_error != null)
@@ -170,12 +182,14 @@ class _WorkspaceTeamActivityState extends State<WorkspaceTeamActivity> {
                         children: [
                           if (task != null)
                             OutlinedButton.icon(
-                              onPressed: () => showWorkspaceAgent(
-                                context,
-                                api: widget.api,
-                                task: task,
-                                onChanged: widget.onChanged,
-                              ),
+                              onPressed: _coordinated
+                                  ? null
+                                  : () => showWorkspaceAgent(
+                                      context,
+                                      api: widget.api,
+                                      task: task,
+                                      onChanged: widget.onChanged,
+                                    ),
                               icon: Icon(
                                 stage == null
                                     ? Icons.play_arrow
